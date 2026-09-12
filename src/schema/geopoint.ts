@@ -20,7 +20,9 @@ function assertInRange(lat: number, lng: number): void {
     throw new RangeError(`Latitude ${lat} is outside -90..90. Did you pass [lng, lat]?`);
   }
   if (Math.abs(lng) > LNG_RANGE) {
-    throw new RangeError(`Longitude ${lng} is outside -180..180. Did you pass [lng, lat]?`);
+    // No transposition hint here: a real latitude is always <= 90, so a swapped pair can
+    // never overflow the longitude range. Only the latitude check above can catch one.
+    throw new RangeError(`Longitude ${lng} is outside -180..180`);
   }
 }
 

@@ -15,6 +15,17 @@ function unreachableIndicator(): TypesenseHealthIndicator {
   );
 }
 
+/**
+ * Stands in for a reachable cluster. The `ok: false` branch cannot be produced by a real
+ * server on demand, and it is the one case where "reachable" and "healthy" disagree — so it
+ * is worth pinning rather than leaving to the integration suite.
+ */
+function stubbedIndicator(ok: boolean): TypesenseHealthIndicator {
+  return new TypesenseHealthIndicator({
+    raw: { health: { retrieve: async () => ({ ok }) } },
+  } as unknown as TypesenseClient);
+}
+
 describe("TypesenseHealthIndicator", () => {
   it("reports down with a message when the cluster is unreachable", async () => {
     const result = await unreachableIndicator().isHealthy();
@@ -26,6 +37,20 @@ describe("TypesenseHealthIndicator", () => {
 
   it("does not throw — terminus reads the status off the returned object", async () => {
     await expect(unreachableIndicator().isHealthy()).resolves.toBeDefined();
+  });
+
+  it("reports up when the cluster answers ok", async () => {
+    const result = await stubbedIndicator(true).isHealthy();
+
+    expect(result.typesense?.status).toBe("up");
+    expect(result.typesense?.message).toBeUndefined();
+  });
+
+  it("reports down when a reachable cluster says it is not ok", async () => {
+    const result = await stubbedIndicator(false).isHealthy();
+
+    expect(result.typesense?.status).toBe("down");
+    expect(result.typesense?.message).toBe("Typesense reported not ok");
   });
 
   it("names the entry after the key it was given", async () => {
