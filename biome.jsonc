@@ -1,0 +1,24 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.12/schema.json",
+  "files": { "includes": ["src/**/*.ts"] },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "javascript": {
+    // NestJS injects through constructor parameter decorators (@Inject).
+    "parser": { "unsafeParameterDecoratorsEnabled": true }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "style": {
+        // DI resolves constructor params via emitDecoratorMetadata, which needs the class
+        // imported as a runtime value. `import type` erases it and breaks injection.
+        "useImportType": "off"
+      },
+      "complexity": {
+        // NestJS dynamic modules are static-only classes by design — the class is the token.
+        "noStaticOnlyClass": "off"
+      }
+    }
+  }
+}

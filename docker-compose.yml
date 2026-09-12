@@ -1,0 +1,18 @@
+# Typesense for the integration suite: `docker compose up -d && npm run test:integration`.
+# Matches the defaults in src/typesense.integration.test.ts.
+services:
+  typesense:
+    image: typesense/typesense:29.0
+    ports:
+      - "8108:8108"
+    command: "--data-dir /data --api-key=xyz --enable-cors"
+    volumes:
+      - typesense-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8108/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  typesense-data:
