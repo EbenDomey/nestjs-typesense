@@ -73,11 +73,28 @@ jobs:
         run: |
           cat > smoke.mjs <<'SMOKE'
           import { createRequire } from 'node:module'
+          import { readFileSync } from 'node:fs'
           import 'reflect-metadata'
 
           const require = createRequire(import.meta.url)
+
+          // Checked before anything is loaded. Node 22+ reparses a stray ESM file as a module
+          // when it sees module syntax, so a missing marker would let `import()` succeed here
+          // and only fail for consumers on Node 20 — as a bare SyntaxError, far from the cause.
+          for (const [dir, expected] of [['cjs', 'commonjs'], ['esm', 'module']]) {
+            const marker = JSON.parse(readFileSync(`./dist/${dir}/package.json`, 'utf8'))
+            if (marker.type !== expected)
+              throw new Error(`dist/${dir}/package.json declares type ${marker.type}, expected ${expected}`)
+          }
+
           const cjs = require('./dist/cjs/index.js')
           const esm = await import('./dist/esm/index.js')
+
+          // The markers say what the directories claim; this checks what tsc actually emitted.
+          if (!/^export /m.test(readFileSync('./dist/esm/index.js', 'utf8')))
+            throw new Error('dist/esm/index.js has no ESM export statement — the ESM pass emitted CommonJS')
+          if (!/require\(/.test(readFileSync('./dist/cjs/index.js', 'utf8')))
+            throw new Error('dist/cjs/index.js has no require() call — the CJS pass emitted ESM')
 
           const required = [
             'TypesenseModule', 'TypesenseClient', 'TypesenseIndexer', 'TypesenseCollections',
