@@ -65,26 +65,43 @@ jobs:
       - name: Unit tests
         run: bun run test
 
-      # Proves the published CommonJS output actually loads on every Node the
-      # engines field promises, and that the DI classes kept their decorator
-      # metadata — tsc emits design:paramtypes, esbuild-based bundlers do not.
-      - name: Smoke-test the built package
+      # Proves both published outputs actually load on every Node the engines field
+      # promises, that the DI classes kept their decorator metadata — tsc emits
+      # design:paramtypes, esbuild-based bundlers do not — and that loading the two
+      # copies together does not split the injection tokens.
+      - name: Smoke-test both built outputs
         run: |
-          node -e "
-            require('reflect-metadata');
-            const pkg = require('./dist');
-            const required = [
-              'TypesenseModule', 'TypesenseClient', 'TypesenseIndexer',
-              'TypesenseCollections', 'defineCollection', 'field', 'TypesenseSchema',
-            ];
-            const missing = required.filter((k) => pkg[k] === undefined);
-            if (missing.length) throw new Error('missing exports: ' + missing.join(', '));
+          cat > smoke.mjs <<'SMOKE'
+          import { createRequire } from 'node:module'
+          import 'reflect-metadata'
 
-            const meta = Reflect.getMetadata('design:paramtypes', pkg.TypesenseClient);
-            if (!meta) throw new Error('TypesenseClient lost design:paramtypes — NestJS DI would break at runtime');
+          const require = createRequire(import.meta.url)
+          const cjs = require('./dist/cjs/index.js')
+          const esm = await import('./dist/esm/index.js')
 
-            console.log('dist loads on node ' + process.versions.node + ', ' + Object.keys(pkg).length + ' exports, DI metadata intact');
-          "
+          const required = [
+            'TypesenseModule', 'TypesenseClient', 'TypesenseIndexer', 'TypesenseCollections',
+            'defineCollection', 'field', 'TypesenseSchema',
+          ]
+
+          for (const [label, pkg] of [['cjs', cjs], ['esm', esm]]) {
+            const missing = required.filter((k) => pkg[k] === undefined)
+            if (missing.length) throw new Error(label + ' missing exports: ' + missing.join(', '))
+
+            const meta = Reflect.getMetadata('design:paramtypes', pkg.TypesenseClient)
+            if (!meta) throw new Error(label + ' lost design:paramtypes — NestJS DI would break at runtime')
+          }
+
+          // Both builds loaded at once must agree on the injection tokens, or @Inject in one
+          // copy silently fails to match the provider registered by the other.
+          for (const token of ['TYPESENSE_MODULE_OPTIONS', 'TYPESENSE_CLIENT', 'TYPESENSE_COLLECTIONS']) {
+            if (cjs[token] !== esm[token]) throw new Error('token ' + token + ' differs across the CJS and ESM copies')
+          }
+
+          console.log('cjs + esm load on node ' + process.versions.node + ', DI metadata intact, tokens shared')
+          SMOKE
+          node smoke.mjs
+          rm smoke.mjs
 
   integration:
     name: integration (live typesense)

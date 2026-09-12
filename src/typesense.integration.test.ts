@@ -15,7 +15,7 @@ import {
   TypesenseModule,
   TypesenseSchema,
   TypesenseString,
-} from "../dist/index.js";
+} from "../dist/cjs/index.js";
 
 /**
  * Runs against a real Typesense server, and deliberately imports the BUILT package
@@ -561,5 +561,66 @@ describe("integration: against a live Typesense server", () => {
     it("fails loudly when a collection has no collector", async () => {
       await expect(indexer.reindex(videos)).rejects.toThrow(/No collector registered/);
     });
+  });
+});
+
+/**
+ * The dual-package hazard.
+ *
+ * The package ships CJS and ESM builds, and a consumer can end up with both loaded at once —
+ * one dependency requiring it while another imports it. Anything whose identity matters must
+ * survive that. Injection tokens are the dangerous case: plain `Symbol()` is unique per copy,
+ * so `@Inject(TOKEN)` in one build would not match the provider the other registered and Nest
+ * would fail to resolve it at bootstrap, with an error pointing nowhere near the cause.
+ *
+ * Needs no server, but does need both builds on disk, so it lives with the integration suite.
+ */
+describe("dual package (CJS + ESM loaded together)", () => {
+  // biome-ignore lint/suspicious/noExplicitAny: loading the built package, which has no types here.
+  let cjs: any;
+  // biome-ignore lint/suspicious/noExplicitAny: as above.
+  let esm: any;
+
+  beforeAll(async () => {
+    // Each path carries its own module-format marker, so these load as CommonJS and as ESM
+    // respectively. The first assertion below checks they really are separate instances.
+    cjs = await import("../dist/cjs/index.js");
+    esm = await import("../dist/esm/index.js");
+  });
+
+  it("really does load two distinct copies", () => {
+    // If this is false the rest of the suite proves nothing.
+    expect(cjs.TypesenseClient).not.toBe(esm.TypesenseClient);
+  });
+
+  it("shares injection tokens across the copies", () => {
+    expect(cjs.TYPESENSE_MODULE_OPTIONS).toBe(esm.TYPESENSE_MODULE_OPTIONS);
+    expect(cjs.TYPESENSE_CLIENT).toBe(esm.TYPESENSE_CLIENT);
+    expect(cjs.TYPESENSE_COLLECTIONS).toBe(esm.TYPESENSE_COLLECTIONS);
+  });
+
+  it("hashes an identical collection identically from either copy", () => {
+    // The migrator compares this hash; a mismatch would read as drift that never resolves.
+    const declare = (m: typeof cjs) =>
+      m.defineCollection({
+        name: "it_dual",
+        fields: { title: m.field.string(), durationMs: m.field.int32({ sort: true }) },
+        defaultSortingField: "durationMs",
+      });
+
+    expect(declare(cjs).hash).toBe(declare(esm).hash);
+  });
+
+  it("resolves a collection declared by the other copy", () => {
+    const fromCjs = cjs.defineCollection({
+      name: "it_dual",
+      fields: { title: cjs.field.string() },
+    });
+    expect(esm.resolveCollection(fromCjs).name).toBe("it_dual");
+  });
+
+  it("keeps design:paramtypes in the ESM build, so Nest DI works there too", () => {
+    expect(Reflect.getMetadata("design:paramtypes", esm.TypesenseClient)).toBeInstanceOf(Array);
+    expect(Reflect.getMetadata("design:paramtypes", esm.TypesenseIndexer)).toBeInstanceOf(Array);
   });
 });

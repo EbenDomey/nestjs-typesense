@@ -20,8 +20,8 @@
     "url": "https://github.com/EbenDomey/nestjs-typesense/issues"
   },
   "homepage": "https://github.com/EbenDomey/nestjs-typesense#readme",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "types": "./dist/cjs/index.d.ts",
   "files": [
     "dist",
     "README.md",
@@ -35,7 +35,9 @@
   },
   "scripts": {
     "prebuild": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "npm run build:cjs && npm run build:esm && node scripts/finalize-dist.mjs",
+    "build:cjs": "tsc -p tsconfig.build.json",
+    "build:esm": "tsc -p tsconfig.build.esm.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:integration": "npm run build && vitest run -c vitest.integration.config.ts",
@@ -61,5 +63,19 @@
     "typescript": "^5.6.0",
     "typesense": "^3.0.6",
     "vitest": "^2.0.0"
+  },
+  "module": "./dist/esm/index.js",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
   }
 }

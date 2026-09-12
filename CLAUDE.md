@@ -46,7 +46,16 @@ other projects as an ordinary public dependency.
   `design:paramtypes` it emits. Dropping it breaks DI silently at runtime, not at build time.
   After changing anything about the build, verify with:
   `grep -l "design:paramtypes" dist/**/*.js` — expect the DI classes to be listed.
-- Output is **CommonJS** for now. Adding ESM is non-breaking; see TASK-005.
+- Output is **dual**: `dist/cjs` (CommonJS) and `dist/esm` (ESM), built by two `tsc` passes
+  (`tsconfig.build.json` and `tsconfig.build.esm.json`) and selected by the `exports` map.
+  `scripts/finalize-dist.mjs` then writes a `package.json` into each directory carrying only
+  `{"type": ...}` — without those markers Node reads the root `package.json` and treats
+  `dist/esm/*.js` as CommonJS. Never delete that step.
+- **Injection tokens must stay `Symbol.for`, never plain `Symbol()`.** An application can end
+  up with both builds loaded (one dependency `require`s the package, another `import`s it).
+  Plain symbols are per-copy, so the two copies would hold different tokens and every
+  `@Inject(TYPESENSE_CLIENT)` would fail to resolve at bootstrap. `Symbol.for` shares them
+  through the global registry. The integration suite loads both builds together and asserts it.
 
 ## Type-level conventions
 
@@ -123,7 +132,7 @@ bun run build       # tsc -> dist/ (CJS)
 
 - `npm test` is hermetic. `npm run test:integration` needs a live Typesense and is kept
   out of the unit config by an explicit `exclude`, not by naming luck.
-- The integration suite imports `../dist`, never `src`. Vitest transpiles with esbuild,
+- The integration suite imports `../dist/cjs`, never `src`. Vitest transpiles with esbuild,
   which honours `experimentalDecorators` but **silently drops `emitDecoratorMetadata`** —
   `design:paramtypes` comes back `undefined`, so Nest cannot resolve constructor
   injection and every service arrives as `undefined`. Compiled `dist` carries the
