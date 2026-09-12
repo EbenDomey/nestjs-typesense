@@ -10,6 +10,11 @@ export type { TypesenseCollector } from "./collectors/typesense-collector.js";
 export type { IndexResult } from "./collectors/typesense-indexer.js";
 export { TypesenseIndexer } from "./collectors/typesense-indexer.js";
 export type {
+  TypesenseHealthDetail,
+  TypesenseHealthResult,
+} from "./health/typesense.health.js";
+export { TypesenseHealthIndicator } from "./health/typesense.health.js";
+export type {
   InferDocument,
   InvalidCollectionFields,
   TypesenseCollection,
@@ -47,6 +52,8 @@ export type {
   TypesenseFieldTypeMap,
 } from "./schema/field.js";
 export { createField, field } from "./schema/field.js";
+export type { Geopoint, LatLng } from "./schema/geopoint.js";
+export { createGeopoint, isGeopoint, parseGeopoint } from "./schema/geopoint.js";
 export {
   TYPESENSE_CLIENT,
   TYPESENSE_COLLECTION,

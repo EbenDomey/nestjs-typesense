@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import { Logger } from "@nestjs/common";
+import { HealthCheckService, TerminusModule } from "@nestjs/terminus";
 import { Test, type TestingModule } from "@nestjs/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -10,6 +11,7 @@ import {
   TypesenseClient,
   TypesenseCollections,
   type TypesenseCollector,
+  TypesenseHealthIndicator,
   TypesenseIndexer,
   TypesenseInt32,
   TypesenseModule,
@@ -561,5 +563,65 @@ describe("integration: against a live Typesense server", () => {
     it("fails loudly when a collection has no collector", async () => {
       await expect(indexer.reindex(videos)).rejects.toThrow(/No collector registered/);
     });
+  });
+});
+
+/**
+ * The point of this suite is that `@nestjs/terminus` is a devDependency here and nothing in
+ * `src` imports it. It exists to check the one inference `TypesenseHealthIndicator` is built
+ * on: that terminus' current API reads the status off the object a check RETURNS, rather
+ * than requiring a thrown `HealthCheckError`. If that is wrong, the indicator silently
+ * reports healthy for a dead cluster — so it is verified against the real service, not
+ * assumed from the docs.
+ */
+describe("TypesenseHealthIndicator with @nestjs/terminus", () => {
+  let moduleRef: TestingModule;
+  let health: HealthCheckService;
+  let indicator: TypesenseHealthIndicator;
+
+  beforeAll(async () => {
+    moduleRef = await Test.createTestingModule({
+      imports: [TerminusModule, TypesenseModule.forRoot({ ...connection, migrations: "off" })],
+    }).compile();
+    await moduleRef.init();
+
+    health = moduleRef.get(HealthCheckService);
+    indicator = moduleRef.get(TypesenseHealthIndicator);
+  });
+
+  afterAll(async () => {
+    await moduleRef?.close();
+  });
+
+  it("is injectable from the module without terminus being a dependency of the package", () => {
+    expect(indicator).toBeInstanceOf(TypesenseHealthIndicator);
+  });
+
+  it("reports ok through terminus when the cluster answers", async () => {
+    const result = await health.check([() => indicator.isHealthy("typesense")]);
+
+    expect(result.status).toBe("ok");
+    expect(result.info?.typesense?.status).toBe("up");
+    expect(result.error).toEqual({});
+  });
+
+  it("reports error through terminus when the cluster does not answer", async () => {
+    const dead = new TypesenseHealthIndicator(
+      new TypesenseClient({
+        nodes: [{ host: "127.0.0.1", port: 1, protocol: "http" }],
+        apiKey: "unused",
+        connectionTimeoutSeconds: 1,
+        numRetries: 0,
+      }),
+    );
+
+    // terminus throws a 503 ServiceUnavailableException once any indicator is down.
+    const failure = await health.check([() => dead.isHealthy("typesense")]).catch((e) => e);
+
+    const response = (
+      failure as { response?: { status?: string; error?: Record<string, unknown> } }
+    ).response;
+    expect(response?.status).toBe("error");
+    expect(response?.error?.typesense).toMatchObject({ status: "down" });
   });
 });
