@@ -10,6 +10,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The `prepare` script installs husky's git hooks. They are for local use, and a
+# CI runner has nothing to hook into.
+env:
+  HUSKY: 0
+
 jobs:
   check:
     name: check (node ${{ matrix.node }})

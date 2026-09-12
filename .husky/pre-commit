@@ -1,0 +1,9 @@
+# Checks only what is actually being committed, so the hook stays sub-second and
+# does not become something worth routing around. `--staged` needs the vcs block
+# in biome.jsonc. The heavy gate lives in pre-push.
+#
+# --no-errors-on-unmatched matters: biome only includes src/**/*.ts, so a commit
+# touching just docs, workflows or backlog files matches nothing, and without it
+# biome exits 1 and blocks a perfectly good commit.
+set -e
+bunx biome check --staged --no-errors-on-unmatched

@@ -1,0 +1,32 @@
+# Mirrors the hermetic `check` job in .github/workflows/ci.yml, so a push that
+# passes here does not come back red from CI.
+#
+# The build must run before the typecheck: src/typesense.integration.test.ts
+# imports ../dist/index.js by design, so dist is an input to `tsc --noEmit`.
+#
+# biome is invoked directly rather than through `bun run lint`, whose --write
+# flag would rewrite the working tree instead of failing.
+#
+# The integration suite is deliberately NOT here: it throws rather than skips
+# when no Typesense answers, so including it would block every push made while
+# the local server is down. Run it with `bun run test:integration`.
+#
+# Escape hatch for a genuine emergency: git push --no-verify
+set -e
+
+echo "pre-push: build"
+bun run build
+
+echo "pre-push: typecheck"
+bun run typecheck
+
+echo "pre-push: lint"
+bunx biome lint src
+
+echo "pre-push: format"
+bunx biome format src
+
+echo "pre-push: unit tests"
+bun run test
+
+echo "pre-push: ok"
