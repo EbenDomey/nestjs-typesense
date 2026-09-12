@@ -120,7 +120,8 @@ styles work there without any config change. Reach for `defineCollection` if you
 this from plain JavaScript, from a non-Nest TypeScript project, or if you would rather keep
 schemas as plain data.
 
-The package ships CommonJS, so `require('nestjs-typesense')` works as-is.
+The package ships both CommonJS and ESM, so `require('nestjs-typesense')` and
+`import ... from 'nestjs-typesense'` both work as-is, each with its own type declarations.
 
 ## Register the module
 
@@ -447,9 +448,29 @@ made while your local Typesense is down. Run it yourself with
 `npm run test:integration`. In a genuine emergency, `git push --no-verify`.
 
 One wrinkle worth knowing if you add checks: the typecheck needs `dist` to
-exist. `src/typesense.integration.test.ts` imports `../dist/index.js` by design,
+exist. `src/typesense.integration.test.ts` imports `../dist/cjs/index.js` by design,
 so `tsc --noEmit` fails on a clean checkout until you have built once. Both the
 hook and CI build first.
+
+## Module formats
+
+Both are published, selected by the `exports` map:
+
+| | Entry | Types |
+| --- | --- | --- |
+| `require()` | `dist/cjs/index.js` | `dist/cjs/index.d.ts` |
+| `import` | `dist/esm/index.js` | `dist/esm/index.d.ts` |
+
+Both are compiled with `tsc`. That is not a preference — esbuild-based bundlers do not
+implement `emitDecoratorMetadata`, and NestJS constructor injection reads the
+`design:paramtypes` it emits. Dropping it breaks DI silently at runtime rather than at
+build time. CI asserts the metadata survives in *both* outputs.
+
+Injection tokens use `Symbol.for`, so they stay identical if an application ends up with
+both copies loaded — one dependency requiring the package while another imports it. With
+plain `Symbol()` the two copies would hold different tokens and `@Inject` would fail to
+resolve at bootstrap. The integration suite loads both builds together and asserts they
+agree.
 
 ## Upgrading to 0.2.0
 
@@ -467,11 +488,13 @@ field list dynamically, cast it: `fields as FieldSelection<typeof videoCollectio
 
 ## Status
 
-v0.2.0, CommonJS. ESM output can be added without a breaking change.
+v0.2.0, CommonJS and ESM.
 
 Verified against Typesense 29/30: collection creation, the `create`/`alter`/`recreate`
-migration strategies, typed search with filtering, faceting and pagination, upsert and
-delete, and full plus incremental indexing through collectors.
+migration strategies, typed search with filtering, faceting and pagination, multi-search,
+upsert and delete, full plus incremental indexing through collectors, geo filtering, and
+the health indicator through real `@nestjs/terminus`. Every filter shape the compiler can
+emit is asserted against the live server, not just against its compiled string.
 
 Known rough edges:
 
