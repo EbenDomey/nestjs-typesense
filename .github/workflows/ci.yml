@@ -37,6 +37,12 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      # Must precede the typecheck: src/typesense.integration.test.ts imports
+      # ../dist/index.js by design, so dist is an input to `tsc --noEmit`. On a
+      # clean checkout the typecheck fails with TS2307 until this has run.
+      - name: Build
+        run: bun run build
+
       # Deliberately separate from the test run: vitest transpiles without
       # typechecking, which is how the optional-field inference bug stayed
       # invisible behind a green suite.
@@ -53,9 +59,6 @@ jobs:
 
       - name: Unit tests
         run: bun run test
-
-      - name: Build
-        run: bun run build
 
       # Proves the published CommonJS output actually loads on every Node the
       # engines field promises, and that the DI classes kept their decorator
@@ -82,16 +85,6 @@ jobs:
     name: integration (live typesense)
     runs-on: ubuntu-latest
 
-    services:
-      typesense:
-        image: typesense/typesense:29.0
-        ports:
-          - 8108:8108
-        env:
-          TYPESENSE_API_KEY: xyz
-          TYPESENSE_DATA_DIR: /tmp/typesense-data
-          TYPESENSE_ENABLE_CORS: 'true'
-
     env:
       TYPESENSE_HOST: localhost
       TYPESENSE_PORT: '8108'
@@ -111,9 +104,22 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      # Started with `docker run` rather than as a job `services:` container.
+      # A service container cannot override the image's command, and Typesense
+      # needs --data-dir pointing at a directory that actually exists; without
+      # it the container exits(1) before ever binding the port. These are the
+      # same arguments docker-compose.yml uses for local runs.
+      - name: Start Typesense
+        run: |
+          docker run -d --name typesense \
+            -p 8108:8108 \
+            -v /tmp/typesense-data:/data \
+            typesense/typesense:29.0 \
+            --data-dir /data --api-key=xyz --enable-cors
+
       # Polled from the runner rather than via a container healthcheck: the
-      # Typesense image is not guaranteed to ship curl, so a healthcheck that
-      # shells out to it can wedge the job instead of failing it.
+      # image is not guaranteed to ship curl, so a healthcheck shelling out to
+      # it can wedge the job instead of failing it.
       - name: Wait for Typesense
         run: |
           for i in $(seq 1 60); do
@@ -125,6 +131,8 @@ jobs:
           done
           echo "::error::Typesense never became healthy on :8108"
           docker ps -a
+          echo '--- container logs ---'
+          docker logs typesense 2>&1 | tail -50
           exit 1
 
       # Builds dist first, then runs the suite against the service container.
