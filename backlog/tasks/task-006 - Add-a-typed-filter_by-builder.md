@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@EbenDomey'
 created_date: '2026-09-09 13:29'
-updated_date: '2026-09-12 13:04'
+updated_date: '2026-09-12 21:18'
 labels:
   - feature
 dependencies: []
@@ -68,6 +68,8 @@ Guard verification per CLAUDE.md, each confirmed to fire by reintroducing the bu
 - Geopoint branch moved after the array branch: the geo-specific guard failed, exactly the assertion written for it.
 
 The live integration suite is the other half. Unit tests pin the compiled string; the 10 integration tests assert WHICH DOCUMENTS come back for every operator against a real server, because the failure that matters is a filter that typechecks, compiles to a plausible string, and is rejected or silently matches nothing. Includes the $or grouping regression (asserting the un-parenthesised form would return an extra document) and values containing && and commas.
+
+Shipped in nestjs-typesense@0.2.0, published to npm 2026-09-12 (tag v0.2.0, commit f63a125, shasum 55b8673777ff0f2a633ecf26bf8d1a442ccd9c7a). Verified after publish by installing 0.2.0 from the registry into a clean consumer: both module conditions resolve to their own build, design:paramtypes intact in each, injection tokens shared, and the typed filter/geopoint/multiSearch/health surface exercised rather than only checked for presence.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

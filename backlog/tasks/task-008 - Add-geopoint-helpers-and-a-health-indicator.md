@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@EbenDomey'
 created_date: '2026-09-09 13:29'
-updated_date: '2026-09-12 12:54'
+updated_date: '2026-09-12 21:18'
 labels:
   - feature
 dependencies: []
@@ -55,6 +55,8 @@ What was checked, in order:
 Deliberately not routed health failures through options.onError: a probe failing is expected, and reporting every one to Sentry would be noise.
 
 Geopoint range check earns its keep on transposition, not just on garbage input: a swapped [lng, lat] is still a structurally valid tuple, so it only fails later as matches from the wrong hemisphere. Latitudes past 90 catch the swap for most populated longitudes; a test uses Sydney for the detectable case and notes in a comment that Paris transposed is undetectable by range alone.
+
+Shipped in nestjs-typesense@0.2.0, published to npm 2026-09-12 (tag v0.2.0, commit f63a125, shasum 55b8673777ff0f2a633ecf26bf8d1a442ccd9c7a). Verified after publish by installing 0.2.0 from the registry into a clean consumer: both module conditions resolve to their own build, design:paramtypes intact in each, injection tokens shared, and the typed filter/geopoint/multiSearch/health surface exercised rather than only checked for presence.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

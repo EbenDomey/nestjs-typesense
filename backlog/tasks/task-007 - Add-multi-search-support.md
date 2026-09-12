@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@EbenDomey'
 created_date: '2026-09-09 13:29'
-updated_date: '2026-09-12 13:08'
+updated_date: '2026-09-12 21:18'
 labels:
   - feature
 dependencies: []
@@ -46,6 +46,8 @@ Verified by reintroducing the collapse — replacing the mapped result type with
 Typesense answering 200 for a failed sub-query is confirmed behaviour, not a defensive guess: the integration test searches a collection that does not exist alongside a valid one and the call rejects naming it. Without the explicit error check that query would have returned found: 0.
 
 Also moved SearchResult into search/result.ts. multi-search.ts needs it and the client needs multi-search's types, so keeping it in the client would have been an import cycle. The barrel still exports SearchResult, so this is not a breaking change for consumers.
+
+Shipped in nestjs-typesense@0.2.0, published to npm 2026-09-12 (tag v0.2.0, commit f63a125, shasum 55b8673777ff0f2a633ecf26bf8d1a442ccd9c7a). Verified after publish by installing 0.2.0 from the registry into a clean consumer: both module conditions resolve to their own build, design:paramtypes intact in each, injection tokens shared, and the typed filter/geopoint/multiSearch/health surface exercised rather than only checked for presence.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

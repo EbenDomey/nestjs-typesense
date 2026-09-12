@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@EbenDomey'
 created_date: '2026-09-09 13:29'
-updated_date: '2026-09-12 13:19'
+updated_date: '2026-09-12 21:18'
 labels:
   - build
 dependencies: []
@@ -37,6 +37,8 @@ Verification run on branch task-005-esm-output:
 - Integration suite: 31/31 against live Typesense, including a new 'dual package (CJS + ESM loaded together)' describe that loads both builds in one process and asserts the classes are distinct instances while the tokens are shared.
 - Gate: bun run build, typecheck, lint, test (25/25) all green.
 - CI gained a 'Smoke-test both built outputs' step. Ran the extracted step locally first, which caught a real bug: the script had been written to /tmp, where bare specifiers such as reflect-metadata fail to resolve (ERR_MODULE_NOT_FOUND). It now writes smoke.mjs into the checkout and removes it afterwards.
+
+Shipped in nestjs-typesense@0.2.0, published to npm 2026-09-12 (tag v0.2.0, commit f63a125, shasum 55b8673777ff0f2a633ecf26bf8d1a442ccd9c7a). Verified after publish by installing 0.2.0 from the registry into a clean consumer: both module conditions resolve to their own build, design:paramtypes intact in each, injection tokens shared, and the typed filter/geopoint/multiSearch/health surface exercised rather than only checked for presence.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
