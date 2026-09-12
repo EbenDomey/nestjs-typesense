@@ -737,3 +737,106 @@ describe("compiled filters against live Typesense", () => {
     expect(() => compileFilter<typeof catalogue>({ channel: "a`b" })).toThrow(/backtick/);
   });
 });
+
+/**
+ * Multi-search against the live server.
+ *
+ * The type-level guards live in the unit tests; what this checks is that one round trip
+ * really does carry several queries, that the results come back in the order the queries
+ * were given, and that a query which fails inside a 200 response is surfaced rather than
+ * reported as zero hits.
+ */
+describe("multiSearch against live Typesense", () => {
+  const films = defineCollection({
+    name: "it_ms_films",
+    fields: { title: field.string(), year: field.int32({ sort: true }) },
+    defaultSortingField: "year",
+  });
+
+  const people = defineCollection({
+    name: "it_ms_people",
+    fields: { name: field.string(), age: field.int32({ sort: true }) },
+    defaultSortingField: "age",
+  });
+
+  let moduleRef: TestingModule;
+  let client: TypesenseClient;
+
+  beforeAll(async () => {
+    moduleRef = await Test.createTestingModule({
+      imports: [TypesenseModule.forRoot({ ...connection, collections: [], migrations: "off" })],
+    }).compile();
+    await moduleRef.init();
+    client = moduleRef.get(TypesenseClient);
+
+    for (const collection of [films, people]) {
+      await drop(client, collection.name);
+      await client.raw.collections().create(toSchema(collection) as never);
+    }
+
+    await client.upsert(films, [
+      { id: "f1", title: "Arrival", year: 2016 },
+      { id: "f2", title: "Dune", year: 2021 },
+    ]);
+    await client.upsert(people, [
+      { id: "p1", name: "Arrival Jones", age: 40 },
+      { id: "p2", name: "Denis", age: 56 },
+      { id: "p3", name: "Denis Two", age: 30 },
+    ]);
+  });
+
+  afterAll(async () => {
+    if (client) {
+      await drop(client, films.name);
+      await drop(client, people.name);
+    }
+    await moduleRef?.close();
+  });
+
+  it("returns results in query order, each against its own collection", async () => {
+    const [filmHits, peopleHits] = await client.multiSearch([
+      { collection: films, q: "Arrival", query_by: "title" },
+      { collection: people, q: "Denis", query_by: "name" },
+    ]);
+
+    // Both collections hold a document matching "Arrival"; only the film comes back first.
+    expect(filmHits.found).toBe(1);
+    expect(filmHits.hits[0]?.document.title).toBe("Arrival");
+    expect(peopleHits.found).toBe(2);
+    expect(peopleHits.hits.map((h) => h.document.name).sort()).toEqual(["Denis", "Denis Two"]);
+  });
+
+  it("applies each query's own filters and sorting", async () => {
+    const [recent, young] = await client.multiSearch([
+      { collection: films, q: "*", query_by: "title", filter_by: { year: { gte: 2020 } } },
+      {
+        collection: people,
+        q: "*",
+        query_by: "name",
+        filter_by: { age: { lt: 50 } },
+        sort_by: "age:asc",
+      },
+    ]);
+
+    expect(recent.hits.map((h) => h.document.title)).toEqual(["Dune"]);
+    expect(young.hits.map((h) => h.document.name)).toEqual(["Denis Two", "Arrival Jones"]);
+  });
+
+  it("carries a single query as happily as several", async () => {
+    const [only] = await client.multiSearch([{ collection: films, q: "Dune", query_by: "title" }]);
+    expect(only.found).toBe(1);
+  });
+
+  it("surfaces a failed query instead of reporting it as zero hits", async () => {
+    const missing = defineCollection({ name: "it_ms_absent", fields: { a: field.string() } });
+
+    // Typesense answers 200 and puts the failure in that query's slot, so without the
+    // explicit check this would look like a search that simply matched nothing.
+    await expect(
+      client.multiSearch([
+        { collection: films, q: "Dune", query_by: "title" },
+        { collection: missing, q: "x", query_by: "a" },
+      ]),
+    ).rejects.toThrow(/it_ms_absent/);
+  });
+});
