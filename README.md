@@ -268,6 +268,62 @@ collections.get(videoCollection) // TypesenseCollection<…fields>, search stays
 collections.get('videos')        // TypesenseCollection, documents come back loose
 ```
 
+## Geopoints
+
+Typesense stores a geopoint as a positional `[lat, lng]` tuple, which is easy to transpose
+silently — a swapped pair is still a valid tuple, and only shows up later as matches from
+the wrong hemisphere. These give the ends names and range-check both:
+
+```ts
+import { createGeopoint, parseGeopoint, isGeopoint } from 'nestjs-typesense'
+
+const location = createGeopoint(48.8584, 2.2945)   // [48.8584, 2.2945]
+const { lat, lng } = parseGeopoint(location)
+
+createGeopoint(151.2093, -33.8688)  // throws: latitude 151.2093 is outside -90..90
+isGeopoint(row.coords)              // narrows an unknown value
+```
+
+The range check catches a transposition whenever the latitude ends up past 90, which covers
+most populated longitudes.
+
+## Health check
+
+`TypesenseHealthIndicator` reports whether the cluster is reachable. It is an ordinary
+provider exported by the module, so it works on its own:
+
+```ts
+constructor(private readonly health: TypesenseHealthIndicator) {}
+
+await this.health.isHealthy()
+// { typesense: { status: 'up', responseTime: 3 } }
+```
+
+It also drops straight into [`@nestjs/terminus`](https://docs.nestjs.com/recipes/terminus),
+**without this package depending on terminus** — nothing under `src/` imports it, not even a
+type, so nothing is added to your install:
+
+```ts
+@Controller('health')
+export class HealthController {
+  constructor(
+    private readonly health: HealthCheckService,
+    private readonly typesense: TypesenseHealthIndicator,
+  ) {}
+
+  @Get()
+  @HealthCheck()
+  check() {
+    return this.health.check([() => this.typesense.isHealthy('typesense')])
+  }
+}
+```
+
+That works because terminus' current `HealthIndicatorService` API has a failing check
+*return* `{ status: 'down' }` rather than throw, so the contract is a plain object this
+package can produce structurally. The integration suite runs the indicator through a real
+`HealthCheckService` to keep that true.
+
 ## Testing
 
 Unit tests cover schema inference and hashing and need nothing running:

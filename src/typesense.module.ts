@@ -2,6 +2,7 @@ import { type DynamicModule, Global, Module, type Provider, type Type } from "@n
 import { TypesenseClient } from "./client/typesense.client.js";
 import { TypesenseCollections } from "./collections/typesense-collections.js";
 import { TypesenseIndexer } from "./collectors/typesense-indexer.js";
+import { TypesenseHealthIndicator } from "./health/typesense.health.js";
 import { TYPESENSE_MODULE_OPTIONS } from "./typesense.constants.js";
 import type { TypesenseModuleOptions } from "./typesense.module-options.js";
 
@@ -11,7 +12,7 @@ export interface TypesenseModuleAsyncOptions {
   useFactory: (...args: never[]) => Promise<TypesenseModuleOptions> | TypesenseModuleOptions;
 }
 
-const EXPORTS = [TypesenseClient, TypesenseCollections, TypesenseIndexer];
+const EXPORTS = [TypesenseClient, TypesenseCollections, TypesenseIndexer, TypesenseHealthIndicator];
 
 @Global()
 @Module({})
