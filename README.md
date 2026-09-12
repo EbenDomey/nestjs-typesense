@@ -240,12 +240,71 @@ constructor(private readonly typesense: TypesenseClient) {}
 
 const results = await this.typesense.search(videoCollection, {
   q: 'mountain sunset',
-  query_by: 'title,description',
-  filter_by: 'durationMs:<60000',
+  query_by: ['title', 'description'],
+  filter_by: { durationMs: { lt: 60_000 }, tags: { has: 'nature' } },
+  sort_by: 'durationMs:desc',
   per_page: 20,
 })
 
 results.hits[0].document.title // typed as string
+```
+
+Field names are checked against the collection, and filter values against the field's
+declared type. All of these fail to compile:
+
+```ts
+query_by: ['titel']                      // no such field
+sort_by: 'duration:desc'                 // no such field
+filter_by: { duratonMs: { lt: 1 } }      // no such field
+filter_by: { durationMs: { lt: '1' } }   // int32 wants a number
+filter_by: { title: { gt: 'a' } }        // no range operators on a string
+filter_by: { title: { has: 'a' } }       // `has` is for arrays
+```
+
+### Filter expressions
+
+Entries are ANDed. A bare value means equality, and a bare array means any-of:
+
+```ts
+filter_by: { channel: 'pets', published: true }      // channel:=`pets` && published:=true
+filter_by: { channel: ['pets', 'diy'] }              // channel:=[`pets`,`diy`]
+```
+
+| Field type | Operators |
+| ---------- | --------- |
+| `string` | `eq` `ne` `match` |
+| `int32` `int64` `float` | `eq` `ne` `gt` `gte` `lt` `lte` `between` |
+| `bool` | `eq` `ne` |
+| arrays | `has` `hasAny` `hasAll` `ne` |
+| `geopoint` | `near` `within` |
+
+```ts
+filter_by: {
+  durationMs: { between: [60_000, 600_000] },
+  tags: { hasAll: ['music', 'live'] },
+  location: { near: { lat: 48.8584, lng: 2.2945, radius: 5, unit: 'km' } },
+  $or: [{ channel: 'pets' }, { rating: { gte: 4.5 } }],
+}
+```
+
+`undefined` values are dropped, so an optional query parameter needs no branching:
+
+```ts
+filter_by: { channel: req.query.channel, published: true }
+```
+
+String values are backtick-wrapped, so a value containing `,`, a space or `&&` is treated
+as data rather than filter syntax. A value containing a backtick is **refused** with an
+error: Typesense documents no way to escape one inside a quoted value, so there is no
+string that means what you asked for.
+
+There is deliberately no `$not`. Typesense has no general negation in `filter_by` — only
+the per-field `!=`, which is what `ne` compiles to.
+
+A raw string is still accepted for anything the builder does not cover:
+
+```ts
+filter_by: 'durationMs:>60000 && tags:=[`music`]'
 ```
 
 A decorated class can be passed in the same place, and the class *is* the document type:
@@ -373,9 +432,23 @@ exist. `src/typesense.integration.test.ts` imports `../dist/index.js` by design,
 so `tsc --noEmit` fails on a clean checkout until you have built once. Both the
 hook and CI build first.
 
+## Upgrading to 0.2.0
+
+`query_by`, `sort_by` and `facet_by` now take a field name or an **array** of them rather
+than a comma-separated string, so each element is checked:
+
+```ts
+query_by: 'title,description'        // 0.1.0
+query_by: ['title', 'description']   // 0.2.0
+```
+
+A single field is unchanged (`query_by: 'title'`). `filter_by` still accepts a raw string,
+so existing filters keep working; the typed object is the new alternative. If you build a
+field list dynamically, cast it: `fields as FieldSelection<typeof videoCollection>`.
+
 ## Status
 
-v0.1.0, CommonJS. ESM output can be added without a breaking change.
+v0.2.0, CommonJS. ESM output can be added without a breaking change.
 
 Verified against Typesense 29/30: collection creation, the `create`/`alter`/`recreate`
 migration strategies, typed search with filtering, faceting and pagination, upsert and
@@ -383,8 +456,6 @@ delete, and full plus incremental indexing through collectors.
 
 Known rough edges:
 
-- `query_by`, `filter_by`, `sort_by` and `facet_by` are unchecked strings; a typo fails
-  at runtime, not at compile time.
 - No multi-search, and no point lookup by id — drop to `client.raw` for both.
 
 ## License
