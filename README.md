@@ -272,6 +272,30 @@ which honours `experimentalDecorators` but drops `emitDecoratorMetadata` — Nes
 resolve constructor injection from source under that transform. `npm run
 test:integration` builds first.
 
+## Contributing
+
+Checks run at three points, each a superset of the one before.
+
+`bun install` installs [husky](https://typicode.github.io/husky/), which wires up two hooks:
+
+| Hook | Runs | Cost |
+| ---- | ---- | ---- |
+| `pre-commit` | `biome check` on staged files only | sub-second |
+| `pre-push` | build, typecheck, lint, format, unit tests | ~15s |
+
+CI then repeats the `pre-push` set across Node 20, 22 and 24, and additionally
+runs the integration suite against a real Typesense in Docker.
+
+`pre-push` deliberately stops short of the integration suite: that suite throws
+rather than skips when no server answers, so including it would block every push
+made while your local Typesense is down. Run it yourself with
+`npm run test:integration`. In a genuine emergency, `git push --no-verify`.
+
+One wrinkle worth knowing if you add checks: the typecheck needs `dist` to
+exist. `src/typesense.integration.test.ts` imports `../dist/index.js` by design,
+so `tsc --noEmit` fails on a clean checkout until you have built once. Both the
+hook and CI build first.
+
 ## Status
 
 v0.1.0, CommonJS. ESM output can be added without a breaking change.
