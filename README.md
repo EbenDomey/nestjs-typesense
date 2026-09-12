@@ -219,6 +219,10 @@ export class VideoCollector implements TypesenseCollector<typeof videoCollection
 
 Register it as an ordinary provider — `@RegisterTypesenseCollector` applies `@Injectable()` for you.
 
+With the decorator style it is `@RegisterTypesenseCollector(VideoDocument)` and
+`implements TypesenseCollector<typeof VideoDocument>`; a bare collection name also works if
+you would rather not import the declaration.
+
 Then drive it from a cron job or CLI command:
 
 ```ts
@@ -244,8 +248,25 @@ const results = await this.typesense.search(videoCollection, {
 results.hits[0].document.title // typed as string
 ```
 
+A decorated class can be passed in the same place, and the class *is* the document type:
+
+```ts
+const results = await this.typesense.search(VideoDocument, { q: 'mountain', query_by: 'title' })
+
+results.hits[0].document.title // typed as string
+```
+
 `results` is a plain `{ found, page, hits, facets }` — shape your own API response from it.
 For anything not covered, `typesense.raw` is the official client.
+
+`search`, `upsert` and `delete` all accept either declaration style, as do
+`TypesenseIndexer`'s methods and `TypesenseCollections.get()`. Looking a collection up by
+the declaration rather than by its name keeps the field types:
+
+```ts
+collections.get(videoCollection) // TypesenseCollection<…fields>, search stays typed
+collections.get('videos')        // TypesenseCollection, documents come back loose
+```
 
 ## Testing
 
@@ -308,9 +329,6 @@ Known rough edges:
 
 - `query_by`, `filter_by`, `sort_by` and `facet_by` are unchecked strings; a typo fails
   at runtime, not at compile time.
-- A collection reached through `resolveCollection()` or `TypesenseCollections.get()`
-  loses its field types, so `search` returns loosely typed documents. Import the
-  `defineCollection()` result directly to keep them.
 - No multi-search, and no point lookup by id — drop to `client.raw` for both.
 
 ## License

@@ -1,4 +1,5 @@
-import type { InferDocument, TypesenseCollection } from "../schema/collection.js";
+import type { TypesenseCollection } from "../schema/collection.js";
+import type { DocumentOf, TypesenseCollectionSource } from "../schema/decorators.js";
 
 /**
  * Feeds documents into a collection.
@@ -10,9 +11,11 @@ import type { InferDocument, TypesenseCollection } from "../schema/collection.js
  * Every method yields batches so a full reindex streams instead of loading the table
  * into memory.
  */
-export interface TypesenseCollector<TCollection extends TypesenseCollection = TypesenseCollection> {
+export interface TypesenseCollector<
+  TSource extends TypesenseCollectionSource = TypesenseCollection,
+> {
   /** Map a batch of source rows to Typesense documents. */
-  transform(entities: unknown[]): InferDocument<TCollection>[];
+  transform(entities: unknown[]): DocumentOf<TSource>[];
 
   /** Every row, for a full rebuild. Optionally narrowed to specific ids. */
   fetchAll(ids?: string[]): AsyncGenerator<unknown[], void, void>;

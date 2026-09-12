@@ -1,6 +1,12 @@
 import "reflect-metadata";
 import { TYPESENSE_COLLECTION, TYPESENSE_FIELDS } from "../typesense.constants.js";
-import { defineCollection, isCollection, type TypesenseCollection } from "./collection.js";
+import {
+  defineCollection,
+  type InferDocument,
+  isCollection,
+  type TypesenseCollection,
+  type TypesenseFieldRecord,
+} from "./collection.js";
 import {
   createField,
   type TypesenseField,
@@ -14,6 +20,27 @@ export type TypesenseDocumentClass = abstract new (...args: never[]) => object;
 
 /** Either declaration style is accepted wherever a collection is expected. */
 export type TypesenseCollectionSource = TypesenseCollection | TypesenseDocumentClass;
+
+/**
+ * The document type for either declaration style.
+ *
+ * A `defineCollection()` result carries its field record in its type, so `InferDocument`
+ * derives the document from it. A `@TypesenseSchema` class carries nothing equivalent —
+ * property decorators write the field map to reflect-metadata at runtime, which is invisible
+ * to the type system — so the class instance *is* the document type, with `id` added the
+ * same way `InferDocument` adds it.
+ *
+ * The `TypesenseCollection` branch has to be tested first: a class is not assignable to it,
+ * but a collection object would also match a loose constructor check.
+ */
+export type DocumentOf<TSource extends TypesenseCollectionSource> =
+  TSource extends TypesenseCollection
+    ? InferDocument<TSource>
+    : TSource extends abstract new (
+          ...args: never[]
+        ) => infer TInstance
+      ? { id: string } & TInstance
+      : never;
 
 /**
  * The property shape a field decorator demands of the class it annotates.
@@ -195,7 +222,19 @@ export function getTypesenseCollection(target: object): TypesenseCollection | un
   return Reflect.getOwnMetadata(TYPESENSE_COLLECTION, target) as TypesenseCollection | undefined;
 }
 
-/** Normalises either declaration style to a collection. */
+/**
+ * Normalises either declaration style to a collection.
+ *
+ * The overloads exist so a `defineCollection()` result survives the round trip with its
+ * field types intact. A single `(source: TypesenseCollectionSource) => TypesenseCollection`
+ * signature would erase them to the `TypesenseFieldRecord` default, which is what made
+ * everything downstream of a resolve return loosely typed documents.
+ */
+export function resolveCollection<TFields extends TypesenseFieldRecord>(
+  source: TypesenseCollection<TFields>,
+): TypesenseCollection<TFields>;
+export function resolveCollection(source: TypesenseDocumentClass): TypesenseCollection;
+export function resolveCollection(source: TypesenseCollectionSource): TypesenseCollection;
 export function resolveCollection(source: TypesenseCollectionSource): TypesenseCollection {
   if (isCollection(source)) return source;
 

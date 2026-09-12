@@ -1,7 +1,15 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from "@nestjs/common";
 import { TypesenseClient } from "../client/typesense.client.js";
-import { type TypesenseCollection, toSchema } from "../schema/collection.js";
-import { resolveCollection } from "../schema/decorators.js";
+import {
+  type TypesenseCollection,
+  type TypesenseFieldRecord,
+  toSchema,
+} from "../schema/collection.js";
+import {
+  resolveCollection,
+  type TypesenseCollectionSource,
+  type TypesenseDocumentClass,
+} from "../schema/decorators.js";
 import { TYPESENSE_MODULE_OPTIONS } from "../typesense.constants.js";
 import type { TypesenseModuleOptions } from "../typesense.module-options.js";
 
@@ -24,7 +32,18 @@ export class TypesenseCollections implements OnApplicationBootstrap {
     }
   }
 
-  get(name: string): TypesenseCollection {
+  /**
+   * The registered collection. Looking one up by the declaration it was registered with —
+   * rather than by its name — keeps its field types, so `search` through the result stays
+   * typed. The string form is the loose escape hatch.
+   */
+  get<TFields extends TypesenseFieldRecord>(
+    collection: TypesenseCollection<TFields>,
+  ): TypesenseCollection<TFields>;
+  get(source: TypesenseDocumentClass): TypesenseCollection;
+  get(name: string): TypesenseCollection;
+  get(source: string | TypesenseCollectionSource): TypesenseCollection {
+    const name = typeof source === "string" ? source : resolveCollection(source).name;
     const collection = this.byName.get(name);
     if (!collection) throw new Error(`Typesense collection "${name}" is not registered`);
     return collection;

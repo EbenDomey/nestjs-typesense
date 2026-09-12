@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import { Injectable } from "@nestjs/common";
-import type { TypesenseCollection } from "../schema/collection.js";
+import { resolveCollection, type TypesenseCollectionSource } from "../schema/decorators.js";
 import { TYPESENSE_COLLECTOR } from "../typesense.constants.js";
 
 /**
@@ -9,9 +9,11 @@ import { TYPESENSE_COLLECTOR } from "../typesense.constants.js";
  * in a module's `providers`.
  */
 export function RegisterTypesenseCollector(
-  collection: TypesenseCollection | string,
+  collection: TypesenseCollectionSource | string,
 ): ClassDecorator {
-  const name = typeof collection === "string" ? collection : collection.name;
+  // Resolved rather than read off `.name` directly: on a decorated class that property is
+  // `Function.name` — the class name, not the collection name.
+  const name = typeof collection === "string" ? collection : resolveCollection(collection).name;
 
   return (target) => {
     Reflect.defineMetadata(TYPESENSE_COLLECTOR, name, target);

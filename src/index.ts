@@ -19,6 +19,7 @@ export type {
 } from "./schema/collection.js";
 export { defineCollection, isCollection, toSchema } from "./schema/collection.js";
 export type {
+  DocumentOf,
   TypesenseArrayElementType,
   TypesenseCollectionSource,
   TypesenseDocumentClass,

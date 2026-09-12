@@ -3,6 +3,7 @@ import { ModulesContainer } from "@nestjs/core";
 import { TypesenseClient } from "../client/typesense.client.js";
 import { TypesenseCollections } from "../collections/typesense-collections.js";
 import type { TypesenseCollection } from "../schema/collection.js";
+import { resolveCollection, type TypesenseCollectionSource } from "../schema/decorators.js";
 import { getCollectorCollectionName } from "./typesense-collector.decorator.js";
 import type { TypesenseCollector } from "./typesense-collector.js";
 
@@ -27,7 +28,10 @@ export class TypesenseIndexer {
   ) {}
 
   /** Full rebuild of one collection. Existing documents are upserted, not dropped. */
-  async reindex(collection: TypesenseCollection | string, ids?: string[]): Promise<IndexResult> {
+  async reindex(
+    collection: TypesenseCollectionSource | string,
+    ids?: string[],
+  ): Promise<IndexResult> {
     const resolved = this.resolve(collection);
     const collector = this.collectorFor(resolved.name);
     let indexed = 0;
@@ -43,7 +47,7 @@ export class TypesenseIndexer {
   }
 
   /** Incremental pass: everything created, updated or deleted since `since`. */
-  async sync(collection: TypesenseCollection | string, since: Date): Promise<IndexResult> {
+  async sync(collection: TypesenseCollectionSource | string, since: Date): Promise<IndexResult> {
     const resolved = this.resolve(collection);
     const collector = this.collectorFor(resolved.name);
     let indexed = 0;
@@ -77,8 +81,10 @@ export class TypesenseIndexer {
     return results;
   }
 
-  private resolve(collection: TypesenseCollection | string): TypesenseCollection {
-    return typeof collection === "string" ? this.collections.get(collection) : collection;
+  private resolve(collection: TypesenseCollectionSource | string): TypesenseCollection {
+    return typeof collection === "string"
+      ? this.collections.get(collection)
+      : resolveCollection(collection);
   }
 
   private collectorFor(name: string): TypesenseCollector {

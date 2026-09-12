@@ -1,7 +1,8 @@
 import "reflect-metadata";
 import { describe, expect, it } from "vitest";
-import { defineCollection, toSchema } from "./collection.js";
+import { defineCollection, type InferDocument, toSchema } from "./collection.js";
 import {
+  type DocumentOf,
   getTypesenseCollection,
   resolveCollection,
   TypesenseArray,
@@ -119,6 +120,52 @@ describe("resolveCollection", () => {
   it("explains itself when handed an undecorated class", () => {
     class NotACollection {}
     expect(() => resolveCollection(NotACollection)).toThrow(/@TypesenseSchema/);
+  });
+});
+
+/**
+ * Regression guards for the document type of each declaration style. These are checked by
+ * `tsc --noEmit`, not by the test runner — vitest transpiles without typechecking, so a
+ * green suite proves nothing about them.
+ */
+describe("document types", () => {
+  type Assert<T extends true> = T;
+  // Invariant equality. A mutual-assignability check would also pass against the widened
+  // `TypesenseFieldRecord` default, which is exactly the regression being guarded against.
+  type Equals<A, B> =
+    (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+
+  it("keeps a collection's field types through resolveCollection", () => {
+    const resolved = resolveCollection(videos);
+
+    type _SurvivesResolve = Assert<
+      Equals<DocumentOf<typeof resolved>, InferDocument<typeof videos>>
+    >;
+
+    // @ts-expect-error — title is still known to be required on the far side of the resolve
+    const missingRequired: DocumentOf<typeof resolved> = { id: "v1", durationMs: 1, tags: [] };
+
+    expect(resolved).toBe(videos);
+    expect(missingRequired.id).toBe("v1");
+  });
+
+  it("uses the instance type as the document type of a decorated class", () => {
+    type _ClassIsTheDocument = Assert<
+      Equals<DocumentOf<typeof VideoDocument>, { id: string } & VideoDocument>
+    >;
+
+    const document: DocumentOf<typeof VideoDocument> = {
+      id: "v1",
+      title: "A clip",
+      durationMs: 3200,
+      tags: ["demo"],
+    };
+
+    // @ts-expect-error — durationMs is a number on the class
+    const wrongType: DocumentOf<typeof VideoDocument> = { ...document, durationMs: "3200" };
+
+    expect(document.thumbnailUrl).toBeUndefined();
+    expect(wrongType.id).toBe("v1");
   });
 });
 

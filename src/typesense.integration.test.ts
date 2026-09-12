@@ -329,17 +329,22 @@ describe("integration: against a live Typesense server", () => {
       expect(result.hits).toHaveLength(1);
     });
 
-    it("searches a collection resolved from a decorated class", async () => {
-      const collection = resolveCollection(VideoDoc);
-      await client.upsert(collection, [
-        { id: "c1", title: "from a class", durationMs: 10 },
-      ] as never);
+    it("searches a decorated class passed directly, keeping its document type", async () => {
+      // No cast on either call: the class instance type is the document type, so the
+      // object literal is checked against it and `document.title` is already `string`.
+      await client.upsert(VideoDoc, [{ id: "c1", title: "from a class", durationMs: 10 }]);
 
-      const result = await client.search(collection, { q: "class", query_by: "title" });
+      const result = await client.search(VideoDoc, { q: "class", query_by: "title" });
       expect(result.found).toBe(1);
-      // NB: a collection resolved from a class loses its field types — see TASK-011.
-      const document = result.hits[0]?.document as unknown as { title?: string } | undefined;
-      expect(document?.title).toBe("from a class");
+      expect(result.hits[0]?.document.title).toBe("from a class");
+    });
+
+    it("still accepts a collection resolved from a decorated class", async () => {
+      const result = await client.search(resolveCollection(VideoDoc), {
+        q: "class",
+        query_by: "title",
+      });
+      expect(result.found).toBe(1);
     });
 
     it("searches a collection looked up by name from the registry", async () => {
@@ -348,6 +353,18 @@ describe("integration: against a live Typesense server", () => {
         query_by: "title",
       });
       expect(result.found).toBe(2);
+    });
+
+    it("keeps field types when the registry is queried with the collection itself", async () => {
+      const result = await client.search(collections.get(videos), {
+        q: "skateboards",
+        query_by: "title",
+      });
+      expect(result.found).toBe(2);
+      // The annotation is the assertion: had the lookup erased the field types, `title`
+      // would come back as the union of every field's value type and fail to compile.
+      const title: string = result.hits[0]?.document.title ?? "";
+      expect(title).toContain("skateboards");
     });
   });
 

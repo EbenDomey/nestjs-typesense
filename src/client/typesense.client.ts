@@ -1,6 +1,10 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { Client } from "typesense";
-import type { InferDocument, TypesenseCollection } from "../schema/collection.js";
+import {
+  type DocumentOf,
+  resolveCollection,
+  type TypesenseCollectionSource,
+} from "../schema/decorators.js";
 import { TYPESENSE_MODULE_OPTIONS } from "../typesense.constants.js";
 import type { TypesenseModuleOptions } from "../typesense.module-options.js";
 
@@ -42,28 +46,31 @@ export class TypesenseClient {
     this.raw = new Client(config);
   }
 
-  async search<TCollection extends TypesenseCollection>(
-    collection: TCollection,
+  async search<TSource extends TypesenseCollectionSource>(
+    collection: TSource,
     params: SearchParams,
-  ): Promise<SearchResult<InferDocument<TCollection>>> {
+  ): Promise<SearchResult<DocumentOf<TSource>>> {
+    const { name } = resolveCollection(collection);
     const result = await this.raw
-      .collections<InferDocument<TCollection>>(collection.name)
+      .collections<DocumentOf<TSource> & object>(name)
       .documents()
       .search(params as never);
 
     return {
       found: result.found,
       page: result.page,
-      hits: (result.hits ?? []) as SearchResult<InferDocument<TCollection>>["hits"],
+      hits: (result.hits ?? []) as SearchResult<DocumentOf<TSource>>["hits"],
       ...(result.facet_counts ? { facets: result.facet_counts } : {}),
     };
   }
 
-  async upsert<TCollection extends TypesenseCollection>(
-    collection: TCollection,
-    documents: InferDocument<TCollection>[],
+  async upsert<TSource extends TypesenseCollectionSource>(
+    collection: TSource,
+    documents: DocumentOf<TSource>[],
   ): Promise<void> {
     if (documents.length === 0) return;
+
+    const { name } = resolveCollection(collection);
 
     // typesense-js throws `ImportError` when any document is rejected rather than
     // returning the per-document results, so the failure path lives in the catch.
@@ -71,15 +78,15 @@ export class TypesenseClient {
     // rejections are routed through `onError`.
     try {
       const results = await this.raw
-        .collections<InferDocument<TCollection>>(collection.name)
+        .collections(name)
         .documents()
         .import(documents, { action: "upsert" });
 
-      this.reportImportFailures(results, documents.length, collection.name);
+      this.reportImportFailures(results, documents.length, name);
     } catch (error) {
       const results = (error as { importResults?: ImportResult[] }).importResults;
       if (!results) throw error;
-      this.reportImportFailures(results, documents.length, collection.name);
+      this.reportImportFailures(results, documents.length, name);
     }
   }
 
@@ -94,13 +101,15 @@ export class TypesenseClient {
     );
   }
 
-  async delete(collection: TypesenseCollection, ids: string[]): Promise<void> {
+  async delete(collection: TypesenseCollectionSource, ids: string[]): Promise<void> {
     if (ids.length === 0) return;
+
+    const { name } = resolveCollection(collection);
 
     await Promise.all(
       ids.map(async (id) => {
         try {
-          await this.raw.collections(collection.name).documents(id).delete();
+          await this.raw.collections(name).documents(id).delete();
         } catch (error) {
           // A document already gone is not a failure — the desired end state holds.
           if ((error as { httpStatus?: number }).httpStatus !== 404) this.handleError(error);
