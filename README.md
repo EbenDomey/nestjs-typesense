@@ -318,6 +318,25 @@ results.hits[0].document.title // typed as string
 `results` is a plain `{ found, page, hits, facets }` — shape your own API response from it.
 For anything not covered, `typesense.raw` is the official client.
 
+### Several queries in one round trip
+
+```ts
+const [videos, channels] = await this.typesense.multiSearch([
+  { collection: videoCollection, q: 'dune', query_by: 'title', filter_by: { published: true } },
+  { collection: ChannelDocument, q: 'dune', query_by: 'handle', sort_by: 'subscribers:desc' },
+])
+
+videos.hits[0].document.title      // typed as string
+channels.hits[0].document.handle   // typed as string
+```
+
+Results come back **positionally**, each typed to its own collection rather than as a union
+of every document type in the batch, and each query carries its own filters and sorting.
+
+Typesense answers `200` even when an individual query fails, reporting the failure in that
+query's slot — which would otherwise look like a search that matched nothing. `multiSearch`
+throws instead, naming the collection.
+
 `search`, `upsert` and `delete` all accept either declaration style, as do
 `TypesenseIndexer`'s methods and `TypesenseCollections.get()`. Looking a collection up by
 the declaration rather than by its name keeps the field types:
@@ -456,7 +475,7 @@ delete, and full plus incremental indexing through collectors.
 
 Known rough edges:
 
-- No multi-search, and no point lookup by id — drop to `client.raw` for both.
+- No point lookup by id — drop to `client.raw`.
 
 ## License
 

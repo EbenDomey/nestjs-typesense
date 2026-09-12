@@ -1,4 +1,3 @@
-export type { SearchResult } from "./client/typesense.client.js";
 export { TypesenseClient } from "./client/typesense.client.js";
 export { TypesenseCollections } from "./collections/typesense-collections.js";
 export {
@@ -66,11 +65,17 @@ export type {
   TypesenseFilter,
 } from "./search/filter.js";
 export type {
+  MultiSearchQueries,
+  MultiSearchQuery,
+  MultiSearchResults,
+} from "./search/multi-search.js";
+export type {
   FieldSelection,
   SearchParams,
   SortExpression,
   SortSelection,
 } from "./search/params.js";
+export type { SearchResult } from "./search/result.js";
 export {
   TYPESENSE_CLIENT,
   TYPESENSE_COLLECTION,
