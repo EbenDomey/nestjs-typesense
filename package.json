@@ -11,7 +11,7 @@
     "postgres"
   ],
   "license": "MIT",
-  "author": "Ebenezer Domey <domeyebenezer7@gmail.com>",
+  "author": "Ebenezer Domey <domeyeben4@gmail.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/EbenDomey/nestjs-typesense.git"
