@@ -5,31 +5,16 @@ import {
   resolveCollection,
   type TypesenseCollectionSource,
 } from "../schema/decorators.js";
+import type { MultiSearchQueries, MultiSearchResults } from "../search/multi-search.js";
+import { compileSearchParams, type SearchParams } from "../search/params.js";
+import { type SearchResult, toSearchResult } from "../search/result.js";
 import { TYPESENSE_MODULE_OPTIONS } from "../typesense.constants.js";
 import type { TypesenseModuleOptions } from "../typesense.module-options.js";
-
-export interface SearchParams {
-  q: string;
-  query_by: string;
-  filter_by?: string;
-  sort_by?: string;
-  facet_by?: string;
-  page?: number;
-  per_page?: number;
-  [key: string]: unknown;
-}
 
 /** Per-document outcome from a bulk import. */
 interface ImportResult {
   success: boolean;
   error?: string;
-}
-
-export interface SearchResult<TDocument> {
-  found: number;
-  page: number;
-  hits: { document: TDocument; highlights?: unknown[] }[];
-  facets?: unknown[];
 }
 
 /**
@@ -48,20 +33,59 @@ export class TypesenseClient {
 
   async search<TSource extends TypesenseCollectionSource>(
     collection: TSource,
-    params: SearchParams,
+    params: SearchParams<TSource>,
   ): Promise<SearchResult<DocumentOf<TSource>>> {
     const { name } = resolveCollection(collection);
     const result = await this.raw
       .collections<DocumentOf<TSource> & object>(name)
       .documents()
-      .search(params as never);
+      .search(compileSearchParams(params) as never);
 
-    return {
-      found: result.found,
-      page: result.page,
-      hits: (result.hits ?? []) as SearchResult<DocumentOf<TSource>>["hits"],
-      ...(result.facet_counts ? { facets: result.facet_counts } : {}),
-    };
+    return toSearchResult<DocumentOf<TSource>>(result, name);
+  }
+
+  /**
+   * Several queries in one round trip, each typed to its own collection.
+   *
+   * Results come back positionally — `results[0]` is typed against the first query's
+   * collection, not as a union of every document type in the batch:
+   *
+   *   const [videos, channels] = await client.multiSearch([
+   *     { collection: videoCollection, q: "x", query_by: "title" },
+   *     { collection: ChannelDocument, q: "x", query_by: "handle" },
+   *   ])
+   */
+  async multiSearch<const TSources extends readonly TypesenseCollectionSource[]>(
+    queries: MultiSearchQueries<TSources>,
+  ): Promise<MultiSearchResults<TSources>> {
+    if (queries.length === 0) return [] as unknown as MultiSearchResults<TSources>;
+
+    const names: string[] = [];
+    const searches = queries.map((query) => {
+      const { collection, ...params } = query;
+      const { name } = resolveCollection(collection as TypesenseCollectionSource);
+      names.push(name);
+      return { collection: name, ...compileSearchParams(params as never) };
+    });
+
+    const response = await this.raw.multiSearch.perform({ searches } as never);
+    const results = (response as { results?: unknown[] }).results ?? [];
+
+    // The return type is a tuple as long as `queries`, and callers destructure it
+    // positionally. A short `results` would hand back `undefined` in a slot the type says
+    // holds a SearchResult, so the mismatch has to fail here rather than downstream.
+    if (results.length !== queries.length) {
+      throw new Error(
+        `multiSearch sent ${queries.length} queries but Typesense returned ` +
+          `${results.length} results; refusing to return a partial tuple.`,
+      );
+    }
+
+    // Typesense answers 200 even when an individual query failed, reporting the failure
+    // inside its slot; `toSearchResult` turns that into a throw naming the collection.
+    return results.map((result, index) =>
+      toSearchResult(result, names[index] ?? `query ${index}`),
+    ) as MultiSearchResults<TSources>;
   }
 
   async upsert<TSource extends TypesenseCollectionSource>(

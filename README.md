@@ -241,12 +241,71 @@ constructor(private readonly typesense: TypesenseClient) {}
 
 const results = await this.typesense.search(videoCollection, {
   q: 'mountain sunset',
-  query_by: 'title,description',
-  filter_by: 'durationMs:<60000',
+  query_by: ['title', 'description'],
+  filter_by: { durationMs: { lt: 60_000 }, tags: { has: 'nature' } },
+  sort_by: 'durationMs:desc',
   per_page: 20,
 })
 
 results.hits[0].document.title // typed as string
+```
+
+Field names are checked against the collection, and filter values against the field's
+declared type. All of these fail to compile:
+
+```ts
+query_by: ['titel']                      // no such field
+sort_by: 'duration:desc'                 // no such field
+filter_by: { duratonMs: { lt: 1 } }      // no such field
+filter_by: { durationMs: { lt: '1' } }   // int32 wants a number
+filter_by: { title: { gt: 'a' } }        // no range operators on a string
+filter_by: { title: { has: 'a' } }       // `has` is for arrays
+```
+
+### Filter expressions
+
+Entries are ANDed. A bare value means equality, and a bare array means any-of:
+
+```ts
+filter_by: { channel: 'pets', published: true }      // channel:=`pets` && published:=true
+filter_by: { channel: ['pets', 'diy'] }              // channel:=[`pets`,`diy`]
+```
+
+| Field type | Operators |
+| ---------- | --------- |
+| `string` | `eq` `ne` `match` |
+| `int32` `int64` `float` | `eq` `ne` `gt` `gte` `lt` `lte` `between` |
+| `bool` | `eq` `ne` |
+| arrays | `has` `hasAny` `hasAll` `ne` |
+| `geopoint` | `near` `within` |
+
+```ts
+filter_by: {
+  durationMs: { between: [60_000, 600_000] },
+  tags: { hasAll: ['music', 'live'] },
+  location: { near: { lat: 48.8584, lng: 2.2945, radius: 5, unit: 'km' } },
+  $or: [{ channel: 'pets' }, { rating: { gte: 4.5 } }],
+}
+```
+
+`undefined` values are dropped, so an optional query parameter needs no branching:
+
+```ts
+filter_by: { channel: req.query.channel, published: true }
+```
+
+String values are backtick-wrapped, so a value containing `,`, a space or `&&` is treated
+as data rather than filter syntax. A value containing a backtick is **refused** with an
+error: Typesense documents no way to escape one inside a quoted value, so there is no
+string that means what you asked for.
+
+There is deliberately no `$not`. Typesense has no general negation in `filter_by` — only
+the per-field `!=`, which is what `ne` compiles to.
+
+A raw string is still accepted for anything the builder does not cover:
+
+```ts
+filter_by: 'durationMs:>60000 && tags:=[`music`]'
 ```
 
 A decorated class can be passed in the same place, and the class *is* the document type:
@@ -260,6 +319,25 @@ results.hits[0].document.title // typed as string
 `results` is a plain `{ found, page, hits, facets }` — shape your own API response from it.
 For anything not covered, `typesense.raw` is the official client.
 
+### Several queries in one round trip
+
+```ts
+const [videos, channels] = await this.typesense.multiSearch([
+  { collection: videoCollection, q: 'dune', query_by: 'title', filter_by: { published: true } },
+  { collection: ChannelDocument, q: 'dune', query_by: 'handle', sort_by: 'subscribers:desc' },
+])
+
+videos.hits[0].document.title      // typed as string
+channels.hits[0].document.handle   // typed as string
+```
+
+Results come back **positionally**, each typed to its own collection rather than as a union
+of every document type in the batch, and each query carries its own filters and sorting.
+
+Typesense answers `200` even when an individual query fails, reporting the failure in that
+query's slot — which would otherwise look like a search that matched nothing. `multiSearch`
+throws instead, naming the collection.
+
 `search`, `upsert` and `delete` all accept either declaration style, as do
 `TypesenseIndexer`'s methods and `TypesenseCollections.get()`. Looking a collection up by
 the declaration rather than by its name keeps the field types:
@@ -268,6 +346,62 @@ the declaration rather than by its name keeps the field types:
 collections.get(videoCollection) // TypesenseCollection<…fields>, search stays typed
 collections.get('videos')        // TypesenseCollection, documents come back loose
 ```
+
+## Geopoints
+
+Typesense stores a geopoint as a positional `[lat, lng]` tuple, which is easy to transpose
+silently — a swapped pair is still a valid tuple, and only shows up later as matches from
+the wrong hemisphere. These give the ends names and range-check both:
+
+```ts
+import { createGeopoint, parseGeopoint, isGeopoint } from 'nestjs-typesense'
+
+const location = createGeopoint(48.8584, 2.2945)   // [48.8584, 2.2945]
+const { lat, lng } = parseGeopoint(location)
+
+createGeopoint(151.2093, -33.8688)  // throws: latitude 151.2093 is outside -90..90
+isGeopoint(row.coords)              // narrows an unknown value
+```
+
+The range check catches a transposition whenever the latitude ends up past 90, which covers
+most populated longitudes.
+
+## Health check
+
+`TypesenseHealthIndicator` reports whether the cluster is reachable. It is an ordinary
+provider exported by the module, so it works on its own:
+
+```ts
+constructor(private readonly health: TypesenseHealthIndicator) {}
+
+await this.health.isHealthy()
+// { typesense: { status: 'up', responseTime: 3 } }
+```
+
+It also drops straight into [`@nestjs/terminus`](https://docs.nestjs.com/recipes/terminus),
+**without this package depending on terminus** — nothing under `src/` imports it, not even a
+type, so nothing is added to your install:
+
+```ts
+@Controller('health')
+export class HealthController {
+  constructor(
+    private readonly health: HealthCheckService,
+    private readonly typesense: TypesenseHealthIndicator,
+  ) {}
+
+  @Get()
+  @HealthCheck()
+  check() {
+    return this.health.check([() => this.typesense.isHealthy('typesense')])
+  }
+}
+```
+
+That works because terminus' current `HealthIndicatorService` API has a failing check
+*return* `{ status: 'down' }` rather than throw, so the contract is a plain object this
+package can produce structurally. The integration suite runs the indicator through a real
+`HealthCheckService` to keep that true.
 
 ## Testing
 
@@ -338,19 +472,33 @@ plain `Symbol()` the two copies would hold different tokens and `@Inject` would 
 resolve at bootstrap. The integration suite loads both builds together and asserts they
 agree.
 
+## Upgrading to 0.2.0
+
+`query_by`, `sort_by` and `facet_by` now take a field name or an **array** of them rather
+than a comma-separated string, so each element is checked:
+
+```ts
+query_by: 'title,description'        // 0.1.0
+query_by: ['title', 'description']   // 0.2.0
+```
+
+A single field is unchanged (`query_by: 'title'`). `filter_by` still accepts a raw string,
+so existing filters keep working; the typed object is the new alternative. If you build a
+field list dynamically, cast it: `fields as FieldSelection<typeof videoCollection>`.
+
 ## Status
 
-v0.1.0, CommonJS and ESM.
+v0.2.0, CommonJS and ESM.
 
 Verified against Typesense 29/30: collection creation, the `create`/`alter`/`recreate`
-migration strategies, typed search with filtering, faceting and pagination, upsert and
-delete, and full plus incremental indexing through collectors.
+migration strategies, typed search with filtering, faceting and pagination, multi-search,
+upsert and delete, full plus incremental indexing through collectors, geo filtering, and
+the health indicator through real `@nestjs/terminus`. Every filter shape the compiler can
+emit is asserted against the live server, not just against its compiled string.
 
 Known rough edges:
 
-- `query_by`, `filter_by`, `sort_by` and `facet_by` are unchecked strings; a typo fails
-  at runtime, not at compile time.
-- No multi-search, and no point lookup by id — drop to `client.raw` for both.
+- No point lookup by id — drop to `client.raw`.
 
 ## License
 

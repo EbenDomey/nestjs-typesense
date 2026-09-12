@@ -1,20 +1,25 @@
 import "reflect-metadata";
 import { Logger } from "@nestjs/common";
+import { HealthCheckService, TerminusModule } from "@nestjs/terminus";
 import { Test, type TestingModule } from "@nestjs/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  compileFilter,
   defineCollection,
   field,
   RegisterTypesenseCollector,
   resolveCollection,
+  type SearchParams,
   TypesenseClient,
   TypesenseCollections,
   type TypesenseCollector,
+  TypesenseHealthIndicator,
   TypesenseIndexer,
   TypesenseInt32,
   TypesenseModule,
   TypesenseSchema,
   TypesenseString,
+  toSchema,
 } from "../dist/cjs/index.js";
 
 /**
@@ -622,5 +627,339 @@ describe("dual package (CJS + ESM loaded together)", () => {
   it("keeps design:paramtypes in the ESM build, so Nest DI works there too", () => {
     expect(Reflect.getMetadata("design:paramtypes", esm.TypesenseClient)).toBeInstanceOf(Array);
     expect(Reflect.getMetadata("design:paramtypes", esm.TypesenseIndexer)).toBeInstanceOf(Array);
+  });
+});
+
+/**
+ * Every filter shape the compiler can emit, run against the live server.
+ *
+ * The unit tests pin the compiled string; these check Typesense actually accepts it. That is
+ * the failure this feature is most exposed to — a filter that typechecks, compiles to a
+ * plausible-looking string, and is rejected (or worse, silently matches nothing) at query
+ * time. Assertions are on which documents come back, not on the string.
+ */
+describe("compiled filters against live Typesense", () => {
+  const PARIS: [number, number] = [48.8584, 2.2945];
+  const LONDON: [number, number] = [51.5074, -0.1278];
+  const NEW_YORK: [number, number] = [40.7128, -74.006];
+
+  const catalogue = defineCollection({
+    name: "it_filters",
+    fields: {
+      title: field.string(),
+      channel: field.string({ facet: true }),
+      durationMs: field.int32({ sort: true }),
+      rating: field.float(),
+      published: field.bool(),
+      tags: field.stringArray({ facet: true }),
+      location: field.geopoint(),
+    },
+    defaultSortingField: "durationMs",
+  });
+
+  let moduleRef: TestingModule;
+  let client: TypesenseClient;
+
+  /** Ids of the matching documents, sorted so assertions do not depend on ranking. */
+  async function ids(filter_by: SearchParams<typeof catalogue>["filter_by"]): Promise<string[]> {
+    const result = await client.search(catalogue, { q: "*", query_by: "title", filter_by });
+    return result.hits.map((h) => h.document.id).sort();
+  }
+
+  beforeAll(async () => {
+    moduleRef = await Test.createTestingModule({
+      imports: [TypesenseModule.forRoot({ ...connection, collections: [], migrations: "off" })],
+    }).compile();
+    await moduleRef.init();
+    client = moduleRef.get(TypesenseClient);
+
+    await drop(client, catalogue.name);
+    await client.raw.collections().create(toSchema(catalogue) as never);
+    await client.upsert(catalogue, [
+      {
+        id: "a1",
+        title: "Alpha",
+        channel: "pets",
+        durationMs: 1000,
+        rating: 4.5,
+        published: true,
+        tags: ["music", "live"],
+        location: PARIS,
+      },
+      {
+        id: "a2",
+        title: "Beta",
+        channel: "diy",
+        durationMs: 5000,
+        rating: 3,
+        published: false,
+        tags: ["news"],
+        location: LONDON,
+      },
+      {
+        id: "a3",
+        // Values that are filter syntax if they are not quoted.
+        title: "Gamma, with comma",
+        channel: "pets && diy",
+        durationMs: 9000,
+        rating: 5,
+        published: true,
+        tags: ["music", "news"],
+        location: NEW_YORK,
+      },
+    ]);
+  });
+
+  afterAll(async () => {
+    if (client) await drop(client, catalogue.name);
+    await moduleRef?.close();
+  });
+
+  it("matches string equality and any-of", async () => {
+    expect(await ids({ channel: "pets" })).toEqual(["a1"]);
+    expect(await ids({ channel: ["pets", "diy"] })).toEqual(["a1", "a2"]);
+    expect(await ids({ channel: { ne: "pets" } })).toEqual(["a2", "a3"]);
+  });
+
+  it("matches numeric comparisons and ranges", async () => {
+    expect(await ids({ durationMs: { gt: 1000 } })).toEqual(["a2", "a3"]);
+    expect(await ids({ durationMs: { gte: 1000, lte: 5000 } })).toEqual(["a1", "a2"]);
+    expect(await ids({ durationMs: { between: [900, 5100] } })).toEqual(["a1", "a2"]);
+    expect(await ids({ rating: { gte: 4.5 } })).toEqual(["a1", "a3"]);
+  });
+
+  it("matches booleans", async () => {
+    expect(await ids({ published: true })).toEqual(["a1", "a3"]);
+    expect(await ids({ published: false })).toEqual(["a2"]);
+  });
+
+  it("matches array membership, including hasAll", async () => {
+    expect(await ids({ tags: { has: "music" } })).toEqual(["a1", "a3"]);
+    expect(await ids({ tags: { hasAny: ["live", "news"] } })).toEqual(["a1", "a2", "a3"]);
+    // The clause-per-value expansion: only a3 carries both.
+    expect(await ids({ tags: { hasAll: ["music", "news"] } })).toEqual(["a3"]);
+  });
+
+  it("matches geo radius and polygon", async () => {
+    expect(await ids({ location: { near: { lat: 48.85, lng: 2.29, radius: 20 } } })).toEqual([
+      "a1",
+    ]);
+    expect(await ids({ location: { near: { lat: 48.85, lng: 2.29, radius: 400 } } })).toEqual([
+      "a1",
+      "a2",
+    ]);
+    // A box around Paris only.
+    expect(
+      await ids({
+        location: {
+          within: [
+            [48.7, 2.1],
+            [48.7, 2.5],
+            [49.0, 2.5],
+            [49.0, 2.1],
+          ],
+        },
+      }),
+    ).toEqual(["a1"]);
+  });
+
+  it("groups $or correctly against the clauses it is ANDed with", async () => {
+    // published AND (pets OR long) — a3 is published and long, a1 is published and pets.
+    expect(
+      await ids({ published: true, $or: [{ channel: "pets" }, { durationMs: { gt: 8000 } }] }),
+    ).toEqual(["a1", "a3"]);
+
+    // Without the parentheses the same expression would also return a2, which is not
+    // published but is "diy". That is the regression this asserts against.
+    expect(
+      await ids({ published: false, $or: [{ channel: "pets" }, { durationMs: { gt: 8000 } }] }),
+    ).toEqual([]);
+  });
+
+  it("treats values containing filter syntax as data", async () => {
+    // Unquoted, "pets && diy" would parse as two clauses and "Gamma, with comma" as a list.
+    expect(await ids({ channel: "pets && diy" })).toEqual(["a3"]);
+    expect(await ids({ title: { eq: "Gamma, with comma" } })).toEqual(["a3"]);
+    // An attempt to close the quote and append a clause is refused outright rather than
+    // being passed to the server in any form.
+    await expect(ids({ channel: "pets` || id:=`a2" })).rejects.toThrow(/backtick/);
+  });
+
+  it("filters by id", async () => {
+    expect(await ids({ id: ["a1", "a3"] })).toEqual(["a1", "a3"]);
+  });
+
+  it("accepts a raw filter string unchanged", async () => {
+    expect(await ids("durationMs:>4000 && published:=true")).toEqual(["a3"]);
+  });
+
+  it("refuses a backtick rather than emitting a filter Typesense would misread", () => {
+    // Pinned against the server's actual behaviour: Typesense offers no escape for a
+    // backtick inside a backtick-quoted value, so there is no string to emit that means
+    // what the caller asked for.
+    expect(() => compileFilter<typeof catalogue>({ channel: "a`b" })).toThrow(/backtick/);
+  });
+});
+
+/**
+ * Multi-search against the live server.
+ *
+ * The type-level guards live in the unit tests; what this checks is that one round trip
+ * really does carry several queries, that the results come back in the order the queries
+ * were given, and that a query which fails inside a 200 response is surfaced rather than
+ * reported as zero hits.
+ */
+describe("multiSearch against live Typesense", () => {
+  const films = defineCollection({
+    name: "it_ms_films",
+    fields: { title: field.string(), year: field.int32({ sort: true }) },
+    defaultSortingField: "year",
+  });
+
+  const people = defineCollection({
+    name: "it_ms_people",
+    fields: { name: field.string(), age: field.int32({ sort: true }) },
+    defaultSortingField: "age",
+  });
+
+  let moduleRef: TestingModule;
+  let client: TypesenseClient;
+
+  beforeAll(async () => {
+    moduleRef = await Test.createTestingModule({
+      imports: [TypesenseModule.forRoot({ ...connection, collections: [], migrations: "off" })],
+    }).compile();
+    await moduleRef.init();
+    client = moduleRef.get(TypesenseClient);
+
+    for (const collection of [films, people]) {
+      await drop(client, collection.name);
+      await client.raw.collections().create(toSchema(collection) as never);
+    }
+
+    await client.upsert(films, [
+      { id: "f1", title: "Arrival", year: 2016 },
+      { id: "f2", title: "Dune", year: 2021 },
+    ]);
+    await client.upsert(people, [
+      { id: "p1", name: "Arrival Jones", age: 40 },
+      { id: "p2", name: "Denis", age: 56 },
+      { id: "p3", name: "Denis Two", age: 30 },
+    ]);
+  });
+
+  afterAll(async () => {
+    if (client) {
+      await drop(client, films.name);
+      await drop(client, people.name);
+    }
+    await moduleRef?.close();
+  });
+
+  it("returns results in query order, each against its own collection", async () => {
+    const [filmHits, peopleHits] = await client.multiSearch([
+      { collection: films, q: "Arrival", query_by: "title" },
+      { collection: people, q: "Denis", query_by: "name" },
+    ]);
+
+    // Both collections hold a document matching "Arrival"; only the film comes back first.
+    expect(filmHits.found).toBe(1);
+    expect(filmHits.hits[0]?.document.title).toBe("Arrival");
+    expect(peopleHits.found).toBe(2);
+    expect(peopleHits.hits.map((h) => h.document.name).sort()).toEqual(["Denis", "Denis Two"]);
+  });
+
+  it("applies each query's own filters and sorting", async () => {
+    const [recent, young] = await client.multiSearch([
+      { collection: films, q: "*", query_by: "title", filter_by: { year: { gte: 2020 } } },
+      {
+        collection: people,
+        q: "*",
+        query_by: "name",
+        filter_by: { age: { lt: 50 } },
+        sort_by: "age:asc",
+      },
+    ]);
+
+    expect(recent.hits.map((h) => h.document.title)).toEqual(["Dune"]);
+    expect(young.hits.map((h) => h.document.name)).toEqual(["Denis Two", "Arrival Jones"]);
+  });
+
+  it("carries a single query as happily as several", async () => {
+    const [only] = await client.multiSearch([{ collection: films, q: "Dune", query_by: "title" }]);
+    expect(only.found).toBe(1);
+  });
+
+  it("surfaces a failed query instead of reporting it as zero hits", async () => {
+    const missing = defineCollection({ name: "it_ms_absent", fields: { a: field.string() } });
+
+    // Typesense answers 200 and puts the failure in that query's slot, so without the
+    // explicit check this would look like a search that simply matched nothing.
+    await expect(
+      client.multiSearch([
+        { collection: films, q: "Dune", query_by: "title" },
+        { collection: missing, q: "x", query_by: "a" },
+      ]),
+    ).rejects.toThrow(/it_ms_absent/);
+  });
+});
+
+/**
+ * The point of this suite is that `@nestjs/terminus` is a devDependency here and nothing in
+ * `src` imports it. It exists to check the one inference `TypesenseHealthIndicator` is built
+ * on: that terminus' current API reads the status off the object a check RETURNS, rather
+ * than requiring a thrown `HealthCheckError`. If that is wrong, the indicator silently
+ * reports healthy for a dead cluster — so it is verified against the real service, not
+ * assumed from the docs.
+ */
+describe("TypesenseHealthIndicator with @nestjs/terminus", () => {
+  let moduleRef: TestingModule;
+  let health: HealthCheckService;
+  let indicator: TypesenseHealthIndicator;
+
+  beforeAll(async () => {
+    moduleRef = await Test.createTestingModule({
+      imports: [TerminusModule, TypesenseModule.forRoot({ ...connection, migrations: "off" })],
+    }).compile();
+    await moduleRef.init();
+
+    health = moduleRef.get(HealthCheckService);
+    indicator = moduleRef.get(TypesenseHealthIndicator);
+  });
+
+  afterAll(async () => {
+    await moduleRef?.close();
+  });
+
+  it("is injectable from the module without terminus being a dependency of the package", () => {
+    expect(indicator).toBeInstanceOf(TypesenseHealthIndicator);
+  });
+
+  it("reports ok through terminus when the cluster answers", async () => {
+    const result = await health.check([() => indicator.isHealthy("typesense")]);
+
+    expect(result.status).toBe("ok");
+    expect(result.info?.typesense?.status).toBe("up");
+    expect(result.error).toEqual({});
+  });
+
+  it("reports error through terminus when the cluster does not answer", async () => {
+    const dead = new TypesenseHealthIndicator(
+      new TypesenseClient({
+        nodes: [{ host: "127.0.0.1", port: 1, protocol: "http" }],
+        apiKey: "unused",
+        connectionTimeoutSeconds: 1,
+        numRetries: 0,
+      }),
+    );
+
+    // terminus throws a 503 ServiceUnavailableException once any indicator is down.
+    const failure = await health.check([() => dead.isHealthy("typesense")]).catch((e) => e);
+
+    const response = (
+      failure as { response?: { status?: string; error?: Record<string, unknown> } }
+    ).response;
+    expect(response?.status).toBe("error");
+    expect(response?.error?.typesense).toMatchObject({ status: "down" });
   });
 });
