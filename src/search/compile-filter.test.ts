@@ -136,4 +136,46 @@ describe("compileFilter", () => {
       /Unknown filter operator "contains" on field "channel"/,
     );
   });
+
+  it("brackets a multi-clause branch inside $or rather than leaning on precedence", () => {
+    // Without the inner brackets this reads `durationMs:>10 && rating:>5 || channel:=\`x\``,
+    // which is only the intended grouping because Typesense happens to bind && tighter.
+    expect(
+      compile({
+        $or: [{ durationMs: { gt: 10 }, rating: { gt: 5 } }, { channel: "x" }],
+      }),
+    ).toBe("((durationMs:>10 && rating:>5) || channel:=`x`)");
+  });
+
+  it("leaves a single-clause branch unbracketed", () => {
+    expect(compile({ $or: [{ channel: "a" }, { channel: "b" }] })).toBe(
+      "(channel:=`a` || channel:=`b`)",
+    );
+  });
+
+  it("refuses a non-number where the syntax has no quoted form", () => {
+    // between/near/within interpolate bare, so a string arriving from request data would
+    // otherwise land in the expression unquoted.
+    expect(() => compile({ durationMs: { between: ["1`) || id:=`x" as never, 10] } })).toThrow(
+      TypeError,
+    );
+    expect(() => compile({ durationMs: { between: [1, Number.NaN] } })).toThrow(/finite numbers/);
+    expect(() =>
+      compile({ location: { near: { lat: "48" as never, lng: 2, radius: 5 } } }),
+    ).toThrow(/finite numbers/);
+    expect(() =>
+      compile({ location: { near: { lat: 48, lng: 2, radius: 5, unit: "parsecs" as never } } }),
+    ).toThrow(/"km" or "mi"/);
+    expect(() =>
+      compile({
+        location: {
+          within: [
+            [1, 1],
+            [2, 2],
+            [3, "3" as never],
+          ],
+        },
+      }),
+    ).toThrow(/finite numbers/);
+  });
 });

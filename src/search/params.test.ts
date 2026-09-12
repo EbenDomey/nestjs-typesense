@@ -240,4 +240,24 @@ describe("search param types", () => {
 
     expect([byId, raw]).toHaveLength(2);
   });
+
+  it("drops an empty facet or sort selection instead of sending an empty string", () => {
+    // A caller building the list conditionally ends up here; Typesense answers an empty
+    // sort_by with a 400 that does not say which parameter was at fault.
+    const compiled = compileSearchParams<typeof videos>({
+      q: "*",
+      query_by: "title",
+      facet_by: [],
+      sort_by: [],
+    });
+
+    expect(compiled).not.toHaveProperty("facet_by");
+    expect(compiled).not.toHaveProperty("sort_by");
+  });
+
+  it("names query_by when it is empty rather than letting the server answer", () => {
+    expect(() => compileSearchParams<typeof videos>({ q: "*", query_by: [] })).toThrow(
+      /non-empty query_by/,
+    );
+  });
 });
