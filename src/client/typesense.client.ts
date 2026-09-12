@@ -71,6 +71,16 @@ export class TypesenseClient {
     const response = await this.raw.multiSearch.perform({ searches } as never);
     const results = (response as { results?: unknown[] }).results ?? [];
 
+    // The return type is a tuple as long as `queries`, and callers destructure it
+    // positionally. A short `results` would hand back `undefined` in a slot the type says
+    // holds a SearchResult, so the mismatch has to fail here rather than downstream.
+    if (results.length !== queries.length) {
+      throw new Error(
+        `multiSearch sent ${queries.length} queries but Typesense returned ` +
+          `${results.length} results; refusing to return a partial tuple.`,
+      );
+    }
+
     // Typesense answers 200 even when an individual query failed, reporting the failure
     // inside its slot; `toSearchResult` turns that into a throw naming the collection.
     return results.map((result, index) =>

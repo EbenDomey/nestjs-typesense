@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TypesenseClient } from "../client/typesense.client.js";
 import { defineCollection, type InferDocument } from "../schema/collection.js";
 import { TypesenseInt32, TypesenseSchema, TypesenseString } from "../schema/decorators.js";
@@ -86,6 +86,27 @@ describe("multiSearch", () => {
 
     // Port 1 never answers, so this resolving at all proves nothing was sent.
     await expect(client.multiSearch([])).resolves.toEqual([]);
+  });
+
+  it("refuses a short result set rather than returning undefined in a typed slot", async () => {
+    const client = new TypesenseClient({
+      nodes: [{ host: "127.0.0.1", port: 1, protocol: "http" }],
+      apiKey: "unused",
+      connectionTimeoutSeconds: 1,
+    });
+
+    // Two queries, one result back. The declared return type is a 2-tuple, so returning
+    // what arrived would put `undefined` where a SearchResult is promised.
+    vi.spyOn(client.raw.multiSearch, "perform").mockResolvedValue({
+      results: [{ found: 0, page: 1, hits: [] }],
+    } as never);
+
+    await expect(
+      client.multiSearch([
+        { collection: videos, q: "a", query_by: "title" },
+        { collection: products, q: "b", query_by: "sku" },
+      ]),
+    ).rejects.toThrow(/sent 2 queries but Typesense returned 1/);
   });
 
   it("keeps the type-only guards referenced", () => {
