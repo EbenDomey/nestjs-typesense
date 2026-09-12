@@ -25,13 +25,34 @@ function literal(value: Scalar): string {
   return `\`${value}\``;
 }
 
+/**
+ * Renders a number that is interpolated bare.
+ *
+ * `between`, `near` and `within` are the only places a value reaches the expression without
+ * backticks around it — Typesense's range and geo syntax has no quoted form. The types say
+ * these are numbers, but a filter built from request data can carry a string past them, and
+ * an unquoted string here would be read as filter syntax. Check rather than trust.
+ */
+function numeric(value: unknown, operator: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError(
+      `Filter operator "${operator}" expects finite numbers, received ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
 function list(values: readonly Scalar[]): string {
   if (values.length === 0) throw new Error("Filter list cannot be empty");
   return `[${values.map(literal).join(",")}]`;
 }
 
 function geo(field: string, { lat, lng, radius, unit = "km" }: GeoRadius): string {
-  return `${field}:(${lat}, ${lng}, ${radius} ${unit})`;
+  if (unit !== "km" && unit !== "mi") {
+    throw new TypeError(`Geo radius unit must be "km" or "mi", received ${JSON.stringify(unit)}`);
+  }
+  const coords = [lat, lng, radius].map((n) => numeric(n, "near"));
+  return `${field}:(${coords[0]}, ${coords[1]}, ${coords[2]} ${unit})`;
 }
 
 function operatorClause(field: string, operator: string, value: unknown): string {
@@ -65,14 +86,17 @@ function operatorClause(field: string, operator: string, value: unknown): string
       return `${field}:<=${literal(value as Scalar)}`;
     case "between": {
       const [low, high] = value as [number, number];
-      return `${field}:[${low}..${high}]`;
+      return `${field}:[${numeric(low, "between")}..${numeric(high, "between")}]`;
     }
     case "near":
       return geo(field, value as GeoRadius);
     case "within": {
       const points = value as [number, number][];
       if (points.length < 3) throw new Error(`"within" needs at least 3 points for a polygon`);
-      return `${field}:(${points.flat().join(", ")})`;
+      return `${field}:(${points
+        .flat()
+        .map((n) => numeric(n, "within"))
+        .join(", ")})`;
     }
     default:
       throw new Error(`Unknown filter operator "${operator}" on field "${field}"`);
@@ -107,6 +131,18 @@ function fieldClauses(field: string, spec: unknown): string[] {
 export function compileFilter<TSource extends TypesenseCollectionSource>(
   filter: TypesenseFilter<TSource>,
 ): string {
+  return compileClauses(filter).join(" && ");
+}
+
+/**
+ * The clauses of one expression, before they are ANDed together.
+ *
+ * Kept separate from `compileFilter` so a nested group knows how many clauses it produced,
+ * which is what decides whether it needs its own parentheses.
+ */
+function compileClauses<TSource extends TypesenseCollectionSource>(
+  filter: TypesenseFilter<TSource>,
+): string[] {
   const clauses: string[] = [];
 
   for (const [key, value] of Object.entries(filter as Record<string, unknown>)) {
@@ -114,12 +150,17 @@ export function compileFilter<TSource extends TypesenseCollectionSource>(
 
     if (key === "$and" || key === "$or") {
       const compiled = (value as TypesenseFilter<TSource>[])
-        .map((nested) => compileFilter(nested))
-        .filter((nested) => nested.length > 0);
+        .map((nested) => compileClauses(nested))
+        .filter((nested) => nested.length > 0)
+        // Each branch is bracketed on its own before the group is joined. Typesense 30 does
+        // bind `&&` tighter than `||`, so the bare form happens to mean the right thing —
+        // but relying on that leaves the expression's meaning to the server's parser, and a
+        // multi-clause branch inside `$or` is exactly where getting it wrong is silent.
+        .map((nested) => (nested.length > 1 ? `(${nested.join(" && ")})` : (nested[0] as string)));
 
       if (compiled.length === 0) continue;
-      // Always parenthesise: an un-grouped `||` would otherwise bind against the sibling
-      // clauses this group is ANDed with.
+      // Always parenthesise the group itself: an un-grouped `||` would otherwise bind
+      // against the sibling clauses this group is ANDed with.
       clauses.push(`(${compiled.join(key === "$or" ? " || " : " && ")})`);
       continue;
     }
@@ -127,5 +168,5 @@ export function compileFilter<TSource extends TypesenseCollectionSource>(
     clauses.push(...fieldClauses(key, value));
   }
 
-  return clauses.join(" && ");
+  return clauses;
 }

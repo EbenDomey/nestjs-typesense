@@ -84,8 +84,8 @@ type FilterFor<TValue> = [TValue] extends [[number, number]]
 /**
  * A filter expression over a collection's declared fields.
  *
- * Entries are ANDed. `$or`, `$and` and `$not` nest further expressions; they are prefixed
- * so they cannot collide with a declared field name.
+ * Entries are ANDed. `$or` and `$and` nest further expressions; they are prefixed so they
+ * cannot collide with a declared field name. There is no `$not` — see the note below.
  */
 export type TypesenseFilter<TSource extends TypesenseCollectionSource> = {
   [TName in SearchFieldName<TSource>]?: FilterFor<FieldValueOf<TSource, TName>>;
