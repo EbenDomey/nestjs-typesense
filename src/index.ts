@@ -1,4 +1,4 @@
-export type { SearchParams, SearchResult } from "./client/typesense.client.js";
+export type { SearchResult } from "./client/typesense.client.js";
 export { TypesenseClient } from "./client/typesense.client.js";
 export { TypesenseCollections } from "./collections/typesense-collections.js";
 export {
@@ -47,6 +47,23 @@ export type {
   TypesenseFieldTypeMap,
 } from "./schema/field.js";
 export { createField, field } from "./schema/field.js";
+export { compileFilter } from "./search/compile-filter.js";
+export type {
+  ArrayFilter,
+  BoolFilter,
+  GeoFilter,
+  GeoRadius,
+  NumberFilter,
+  SearchFieldName,
+  StringFilter,
+  TypesenseFilter,
+} from "./search/filter.js";
+export type {
+  FieldSelection,
+  SearchParams,
+  SortExpression,
+  SortSelection,
+} from "./search/params.js";
 export {
   TYPESENSE_CLIENT,
   TYPESENSE_COLLECTION,

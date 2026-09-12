@@ -5,19 +5,9 @@ import {
   resolveCollection,
   type TypesenseCollectionSource,
 } from "../schema/decorators.js";
+import { compileSearchParams, type SearchParams } from "../search/params.js";
 import { TYPESENSE_MODULE_OPTIONS } from "../typesense.constants.js";
 import type { TypesenseModuleOptions } from "../typesense.module-options.js";
-
-export interface SearchParams {
-  q: string;
-  query_by: string;
-  filter_by?: string;
-  sort_by?: string;
-  facet_by?: string;
-  page?: number;
-  per_page?: number;
-  [key: string]: unknown;
-}
 
 /** Per-document outcome from a bulk import. */
 interface ImportResult {
@@ -48,13 +38,13 @@ export class TypesenseClient {
 
   async search<TSource extends TypesenseCollectionSource>(
     collection: TSource,
-    params: SearchParams,
+    params: SearchParams<TSource>,
   ): Promise<SearchResult<DocumentOf<TSource>>> {
     const { name } = resolveCollection(collection);
     const result = await this.raw
       .collections<DocumentOf<TSource> & object>(name)
       .documents()
-      .search(params as never);
+      .search(compileSearchParams(params) as never);
 
     return {
       found: result.found,

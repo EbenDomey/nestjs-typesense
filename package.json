@@ -1,6 +1,6 @@
 {
   "name": "nestjs-typesense",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "An unofficial NestJS module for Typesense: typed collection schemas, declarative collection migrations, and database-agnostic index syncing.",
   "keywords": [
     "nestjs",
