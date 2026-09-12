@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same ref makes an in-flight run redundant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # engines declares ">=20"; 24 is also the current local dev runtime.
+        node: ['20', '22', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # `bun run <script>` honours the node shebang on the installed binaries, so
+      # tsc, vitest and biome all execute under this Node — which is what makes
+      # the matrix meaningful rather than decorative.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # Deliberately separate from the test run: vitest transpiles without
+      # typechecking, which is how the optional-field inference bug stayed
+      # invisible behind a green suite.
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Invoked directly rather than through `bun run lint`, whose --write flag
+      # would rewrite the checkout instead of failing the build.
+      - name: Lint
+        run: bunx biome lint src
+
+      - name: Format check
+        run: bunx biome format src
+
+      - name: Unit tests
+        run: bun run test
+
+      - name: Build
+        run: bun run build
+
+      # Proves the published CommonJS output actually loads on every Node the
+      # engines field promises, and that the DI classes kept their decorator
+      # metadata — tsc emits design:paramtypes, esbuild-based bundlers do not.
+      - name: Smoke-test the built package
+        run: |
+          node -e "
+            require('reflect-metadata');
+            const pkg = require('./dist');
+            const required = [
+              'TypesenseModule', 'TypesenseClient', 'TypesenseIndexer',
+              'TypesenseCollections', 'defineCollection', 'field', 'TypesenseSchema',
+            ];
+            const missing = required.filter((k) => pkg[k] === undefined);
+            if (missing.length) throw new Error('missing exports: ' + missing.join(', '));
+
+            const meta = Reflect.getMetadata('design:paramtypes', pkg.TypesenseClient);
+            if (!meta) throw new Error('TypesenseClient lost design:paramtypes — NestJS DI would break at runtime');
+
+            console.log('dist loads on node ' + process.versions.node + ', ' + Object.keys(pkg).length + ' exports, DI metadata intact');
+          "
+
+  integration:
+    name: integration (live typesense)
+    runs-on: ubuntu-latest
+
+    services:
+      typesense:
+        image: typesense/typesense:29.0
+        ports:
+          - 8108:8108
+        env:
+          TYPESENSE_API_KEY: xyz
+          TYPESENSE_DATA_DIR: /tmp/typesense-data
+          TYPESENSE_ENABLE_CORS: 'true'
+
+    env:
+      TYPESENSE_HOST: localhost
+      TYPESENSE_PORT: '8108'
+      TYPESENSE_API_KEY: xyz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # Polled from the runner rather than via a container healthcheck: the
+      # Typesense image is not guaranteed to ship curl, so a healthcheck that
+      # shells out to it can wedge the job instead of failing it.
+      - name: Wait for Typesense
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS "http://localhost:8108/health" > /dev/null 2>&1; then
+              echo "Typesense answered after ${i}s: $(curl -fsS http://localhost:8108/health)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Typesense never became healthy on :8108"
+          docker ps -a
+          exit 1
+
+      # Builds dist first, then runs the suite against the service container.
+      # The suite throws rather than skipping when nothing answers, so a green
+      # job is proof the server was actually reached.
+      - name: Integration tests
+        run: bun run test:integration

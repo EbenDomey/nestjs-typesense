@@ -75,7 +75,9 @@ describe("integration: against a live Typesense server", () => {
     // Fail loudly rather than silently skipping — a green run must mean the server was hit.
     const health = await fetch(`http://${HOST}:${PORT}/health`).catch(() => undefined);
     if (!health?.ok) {
-      throw new Error(`No Typesense server at ${HOST}:${PORT}. See the comment at the top of this file.`);
+      throw new Error(
+        `No Typesense server at ${HOST}:${PORT}. See the comment at the top of this file.`,
+      );
     }
 
     const moduleRef = await Test.createTestingModule({
@@ -228,10 +230,14 @@ describe("integration: against a live Typesense server", () => {
       await moduleRef.close();
     });
 
-    it("leaves a drifted collection alone under the default \"create\" strategy", async () => {
+    it('leaves a drifted collection alone under the default "create" strategy', async () => {
       const drifted = defineCollection({
         name: "it_drift",
-        fields: { title: field.string(), views: field.int32(), extra: field.string({ optional: true }) },
+        fields: {
+          title: field.string(),
+          views: field.int32(),
+          extra: field.string({ optional: true }),
+        },
         defaultSortingField: "views",
       });
 
@@ -244,14 +250,25 @@ describe("integration: against a live Typesense server", () => {
       expect((live.fields ?? []).map((f) => f.name)).not.toContain("extra");
       await moduleRef.close();
     });
-
   });
 
   describe("querying", () => {
     beforeAll(async () => {
       await client.upsert(videos, [
-        { id: "1", title: "Cats on skateboards", channel: "pets", durationMs: 90_000, tags: ["cat", "funny"] },
-        { id: "2", title: "Dogs on skateboards", channel: "pets", durationMs: 120_000, tags: ["dog"] },
+        {
+          id: "1",
+          title: "Cats on skateboards",
+          channel: "pets",
+          durationMs: 90_000,
+          tags: ["cat", "funny"],
+        },
+        {
+          id: "2",
+          title: "Dogs on skateboards",
+          channel: "pets",
+          durationMs: 120_000,
+          tags: ["dog"],
+        },
         { id: "3", title: "Advanced TypeScript generics", channel: "code", durationMs: 3_600_000 },
       ]);
       // Typesense indexes synchronously on import, but give the write a beat to settle.
@@ -292,7 +309,10 @@ describe("integration: against a live Typesense server", () => {
         query_by: "title",
         facet_by: "channel",
       });
-      const counts = result.facets as { field_name: string; counts: { value: string; count: number }[] }[];
+      const counts = result.facets as {
+        field_name: string;
+        counts: { value: string; count: number }[];
+      }[];
       const channel = counts.find((f) => f.field_name === "channel");
       expect(channel?.counts.find((c) => c.value === "pets")?.count).toBe(2);
     });
@@ -311,7 +331,9 @@ describe("integration: against a live Typesense server", () => {
 
     it("searches a collection resolved from a decorated class", async () => {
       const collection = resolveCollection(VideoDoc);
-      await client.upsert(collection, [{ id: "c1", title: "from a class", durationMs: 10 }] as never);
+      await client.upsert(collection, [
+        { id: "c1", title: "from a class", durationMs: 10 },
+      ] as never);
 
       const result = await client.search(collection, { q: "class", query_by: "title" });
       expect(result.found).toBe(1);
