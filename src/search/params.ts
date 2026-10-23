@@ -1,6 +1,13 @@
 import type { TypesenseCollectionSource } from "../schema/decorators.js";
 import { compileFilter } from "./compile-filter.js";
 import type { SearchFieldName, TypesenseFilter } from "./filter.js";
+import {
+  compileSortBy,
+  type EvalSortExpression,
+  type SortDirection,
+  type TextMatchSortExpression,
+} from "./sort.js";
+import type { VectorFieldName, VectorQueryExpression } from "./vector-query.js";
 
 /**
  * Fields to search, sort or facet on.
@@ -15,16 +22,42 @@ export type FieldSelection<TSource extends TypesenseCollectionSource> =
   | SearchFieldName<TSource>
   | SearchFieldName<TSource>[];
 
-/** `field:asc` / `field:desc`, plus Typesense's relevance pseudo-field. */
-export type SortExpression<TSource extends TypesenseCollectionSource> =
-  | `${SearchFieldName<TSource>}:asc`
-  | `${SearchFieldName<TSource>}:desc`
-  | "_text_match:asc"
-  | "_text_match:desc";
+/** Every sort expression except `_eval`, which is limited to one per `sort_by`. */
+type PlainSortExpression<TSource extends TypesenseCollectionSource> =
+  | `${SearchFieldName<TSource>}:${SortDirection}`
+  | `_text_match:${SortDirection}`
+  | TextMatchSortExpression
+  | `_vector_distance:${SortDirection}`;
 
+/**
+ * `field:asc` / `field:desc`, Typesense's relevance and vector-distance pseudo-fields,
+ * bucketed `_text_match` (`sortTextMatch`) and `_eval` (`sortEval` / `sortEvalWeighted`).
+ */
+export type SortExpression<TSource extends TypesenseCollectionSource> =
+  | PlainSortExpression<TSource>
+  | EvalSortExpression<TSource>;
+
+/**
+ * One sort expression, or up to three of them with at most one `_eval`.
+ *
+ * Both limits are Typesense's ("Only upto 3 sort fields are allowed", "Only one sorting
+ * eval expression is allowed"); spelling them out as tuples makes a literal that breaks
+ * either a compile error. A list assembled at runtime is re-checked before sending.
+ */
 export type SortSelection<TSource extends TypesenseCollectionSource> =
   | SortExpression<TSource>
-  | SortExpression<TSource>[];
+  | SortTuple<PlainSortExpression<TSource>, EvalSortExpression<TSource>>;
+
+type SortTuple<P, E> =
+  | readonly []
+  | readonly [P | E]
+  | readonly [P, P]
+  | readonly [E, P]
+  | readonly [P, E]
+  | readonly [P, P, P]
+  | readonly [E, P, P]
+  | readonly [P, E, P]
+  | readonly [P, P, E];
 
 export interface SearchParams<TSource extends TypesenseCollectionSource> {
   q: string;
@@ -33,6 +66,11 @@ export interface SearchParams<TSource extends TypesenseCollectionSource> {
   filter_by?: TypesenseFilter<TSource> | string;
   sort_by?: SortSelection<TSource>;
   facet_by?: FieldSelection<TSource>;
+  /**
+   * Nearest-neighbour query on a float[] / embedding field — build it with `vectorQuery`.
+   * The field name is checked against the collection.
+   */
+  vector_query?: VectorQueryExpression<VectorFieldName<TSource>>;
   page?: number;
   per_page?: number;
   /** Anything else Typesense accepts, passed through untouched. */
@@ -63,7 +101,7 @@ export function compileSearchParams<TSource extends TypesenseCollectionSource>(
     typeof filter_by === "string" ? filter_by : filter_by ? compileFilter(filter_by) : undefined;
 
   const compiledQueryBy = csv(query_by);
-  const compiledSortBy = csv(sort_by);
+  const compiledSortBy = compileSortBy(sort_by);
   const compiledFacetBy = csv(facet_by);
   if (compiledQueryBy === undefined) {
     // Required by Typesense. Caught here so the message names the parameter, rather than

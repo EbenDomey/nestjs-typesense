@@ -14,12 +14,15 @@ export type {
 } from "./health/typesense.health.js";
 export { TypesenseHealthIndicator } from "./health/typesense.health.js";
 export type {
+  EmbedSourceCheck,
   InferDocument,
   InvalidCollectionFields,
   TypesenseCollection,
   TypesenseCollectionDefinition,
   TypesenseCollectionSchema,
   TypesenseFieldRecord,
+  TypesenseFieldSchema,
+  WritableDocument,
 } from "./schema/collection.js";
 export { defineCollection, isCollection, toSchema } from "./schema/collection.js";
 export type {
@@ -28,6 +31,7 @@ export type {
   TypesenseCollectionSource,
   TypesenseDocumentClass,
   TypesenseSchemaOptions,
+  WritableDocumentOf,
 } from "./schema/decorators.js";
 export {
   getTypesenseCollection,
@@ -35,6 +39,7 @@ export {
   TypesenseArray,
   TypesenseAuto,
   TypesenseBool,
+  TypesenseEmbedding,
   TypesenseFloat,
   TypesenseGeopoint,
   TypesenseInt32,
@@ -44,13 +49,20 @@ export {
   TypesenseSchema,
   TypesenseString,
 } from "./schema/decorators.js";
+export type { FieldMismatch, LiveFieldSchema, SchemaDiff } from "./schema/diff.js";
+export { diffSchema } from "./schema/diff.js";
 export type {
+  TypesenseEmbedConfig,
+  TypesenseEmbeddingField,
+  TypesenseEmbeddingOptions,
+  TypesenseEmbeddingVector,
+  TypesenseEmbedModelConfig,
   TypesenseField,
   TypesenseFieldOptions,
   TypesenseFieldType,
   TypesenseFieldTypeMap,
 } from "./schema/field.js";
-export { createField, field } from "./schema/field.js";
+export { createEmbeddingField, createField, field } from "./schema/field.js";
 export type { Geopoint, LatLng } from "./schema/geopoint.js";
 export { createGeopoint, isGeopoint, parseGeopoint } from "./schema/geopoint.js";
 export { compileFilter } from "./search/compile-filter.js";
@@ -76,6 +88,20 @@ export type {
   SortSelection,
 } from "./search/params.js";
 export type { SearchResult } from "./search/result.js";
+export type {
+  EvalSortExpression,
+  SortDirection,
+  TextMatchSortExpression,
+  WeightedEvalClause,
+} from "./search/sort.js";
+export { sortEval, sortEvalWeighted, sortTextMatch } from "./search/sort.js";
+export type {
+  VectorFieldName,
+  VectorQueryExpression,
+  VectorQueryOptions,
+  VectorQueryTuning,
+} from "./search/vector-query.js";
+export { vectorQuery } from "./search/vector-query.js";
 export {
   TYPESENSE_CLIENT,
   TYPESENSE_COLLECTION,

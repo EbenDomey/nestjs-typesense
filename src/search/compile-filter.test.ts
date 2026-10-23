@@ -179,3 +179,23 @@ describe("compileFilter", () => {
     ).toThrow(/finite numbers/);
   });
 });
+
+describe("compileFilter: clauses _eval relies on", () => {
+  const products = defineCollection({
+    name: "products",
+    fields: { categoryPathIds: field.stringArray(), minPriceMinor: field.int64() },
+  });
+
+  it("filters on id, which every collection carries", () => {
+    expect(compileFilter<typeof products>({ id: { ne: ["a", "b"] } })).toBe("id:!=[`a`,`b`]");
+  });
+
+  it("ANDs two clauses on different fields merged into one object", () => {
+    expect(
+      compileFilter<typeof products>({
+        categoryPathIds: { hasAny: ["c1"] },
+        minPriceMinor: { between: [100, 900] },
+      }),
+    ).toBe("categoryPathIds:=[`c1`] && minPriceMinor:[100..900]");
+  });
+});

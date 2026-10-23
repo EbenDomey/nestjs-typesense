@@ -6,10 +6,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   compileFilter,
   defineCollection,
+  diffSchema,
   field,
   RegisterTypesenseCollector,
   resolveCollection,
   type SearchParams,
+  sortEvalWeighted,
+  sortTextMatch,
   TypesenseClient,
   TypesenseCollections,
   type TypesenseCollector,
@@ -20,6 +23,7 @@ import {
   TypesenseSchema,
   TypesenseString,
   toSchema,
+  vectorQuery,
 } from "../dist/cjs/index.js";
 
 /**
@@ -961,5 +965,203 @@ describe("TypesenseHealthIndicator with @nestjs/terminus", () => {
     ).response;
     expect(response?.status).toBe("error");
     expect(response?.error?.typesense).toMatchObject({ status: "down" });
+  });
+});
+
+/**
+ * Auto-embedding, vector queries and `_eval` sorts against a real server.
+ *
+ * The first run on a fresh server downloads the ts/all-MiniLM-L12-v2 model (~130 MB) while
+ * creating the collection; that took ~45s here and can take minutes on a slow link, hence
+ * the long `beforeAll` timeout. Later runs reuse the cached model.
+ */
+describe("embeddings and advanced sorts against live Typesense", () => {
+  const products = defineCollection({
+    name: "it_products_embed",
+    fields: {
+      title: field.string(),
+      categoryNames: field.stringArray({ facet: true }),
+      tagNames: field.stringArray({ optional: true }),
+      optionValues: field.stringArray({ optional: true }),
+      categoryPathIds: field.stringArray({ facet: true }),
+      minPriceMinor: field.int64(),
+      popularity: field.int32(),
+      embedding: field.embedding({
+        from: ["title", "categoryNames", "tagNames", "optionValues"],
+        model: "ts/all-MiniLM-L12-v2",
+      }),
+    },
+  });
+
+  let moduleRef: TestingModule;
+  let client: TypesenseClient;
+  const errors: unknown[] = [];
+
+  async function ids(params: Pick<SearchParams<typeof products>, "filter_by" | "sort_by">) {
+    const result = await client.search(products, {
+      q: "*",
+      query_by: "title",
+      exclude_fields: "embedding",
+      ...params,
+    });
+    return result.hits.map((h) => h.document.id);
+  }
+
+  beforeAll(async () => {
+    moduleRef = await Test.createTestingModule({
+      imports: [
+        TypesenseModule.forRoot({
+          ...connection,
+          // Creating the collection blocks on the model download the first time.
+          connectionTimeoutSeconds: 600,
+          collections: [],
+          migrations: "off",
+          onError: (error) => errors.push(error),
+        }),
+      ],
+    }).compile();
+    await moduleRef.init();
+    client = moduleRef.get(TypesenseClient);
+
+    await drop(client, products.name);
+    await client.raw.collections().create(toSchema(products) as never);
+    // No `embedding` on any document: the typed write path refuses one, and Typesense fills it.
+    await client.upsert(products, [
+      {
+        id: "p1",
+        title: "Red trail running shoes",
+        categoryNames: ["Footwear", "Running"],
+        tagNames: ["outdoor"],
+        optionValues: ["red", "42"],
+        categoryPathIds: ["c-foot", "c-run"],
+        minPriceMinor: 5_000,
+        popularity: 10,
+      },
+      {
+        id: "p2",
+        title: "Blue road running sneakers",
+        categoryNames: ["Footwear", "Running"],
+        categoryPathIds: ["c-foot", "c-run"],
+        minPriceMinor: 12_000,
+        popularity: 50,
+      },
+      {
+        id: "p3",
+        title: "Stainless kitchen knife",
+        categoryNames: ["Kitchen"],
+        categoryPathIds: ["c-kitchen"],
+        minPriceMinor: 2_000,
+        popularity: 99,
+      },
+    ]);
+  }, 600_000);
+
+  afterAll(async () => {
+    if (client) await drop(client, products.name);
+    await moduleRef?.close();
+  });
+
+  it("indexes every document, computing the embedding server-side", async () => {
+    expect(errors).toEqual([]);
+    const result = await client.search(products, { q: "*", query_by: "title" });
+    expect(result.found).toBe(3);
+    const embedding = result.hits[0]?.document.embedding;
+    expect(embedding).toHaveLength(384);
+  });
+
+  it("matches the declaration under diffSchema, despite the server's added keys", async () => {
+    const live = await client.raw.collections(products.name).retrieve();
+    const embedding = live.fields?.find((f) => f.name === "embedding");
+    // The keys a naive deep-equal would trip over.
+    expect(embedding).toMatchObject({ num_dim: 384, vec_dist: "cosine" });
+    expect(diffSchema(products, live as never).inSync).toBe(true);
+  });
+
+  it("finds documents similar to one by id, with vector_distance on each hit", async () => {
+    const result = await client.search(products, {
+      q: "*",
+      query_by: "title",
+      exclude_fields: "embedding",
+      vector_query: vectorQuery("embedding", { id: "p1", k: 24, distanceThreshold: 0.6 }),
+      sort_by: ["_vector_distance:asc"],
+    });
+    const hits = result.hits.map((h) => [h.document.id, h.vector_distance]);
+    // The other running shoe is close; the knife is past the threshold; p1 itself is excluded.
+    expect(hits.map(([id]) => id)).toEqual(["p2"]);
+    expect(typeof hits[0]?.[1]).toBe("number");
+  });
+
+  it("excludes ids through a typed filter", async () => {
+    expect(await ids({ filter_by: { id: { ne: ["p1", "p2"] } } })).toEqual(["p3"]);
+  });
+
+  it("ranks by a weighted _eval, merged clause first, then a plain sort", async () => {
+    // Without the _eval, popularity alone would order p3, p2, p1.
+    expect(
+      await ids({
+        sort_by: [
+          sortEvalWeighted(
+            [
+              {
+                filter: { categoryPathIds: { hasAny: ["c-run"] }, minPriceMinor: { lte: 8_000 } },
+                score: 3,
+              },
+              { filter: { categoryPathIds: { hasAny: ["c-run"] } }, score: 2 },
+            ],
+            "desc",
+          ),
+          "popularity:desc",
+        ],
+      }),
+    ).toEqual(["p1", "p2", "p3"]);
+  });
+
+  it("scores a document by the FIRST clause it matches, not the sum or the max", async () => {
+    // p1 matches both clauses. Summed it would score 6, maxed 5, and lead either way; by
+    // first match it scores 1 and ties p2, so popularity puts p2 ahead.
+    expect(
+      await ids({
+        sort_by: [
+          sortEvalWeighted(
+            [
+              { filter: { categoryPathIds: { hasAny: ["c-run"] } }, score: 1 },
+              {
+                filter: { categoryPathIds: { hasAny: ["c-run"] }, minPriceMinor: { lte: 8_000 } },
+                score: 5,
+              },
+            ],
+            "desc",
+          ),
+          "popularity:desc",
+        ],
+      }),
+    ).toEqual(["p2", "p1", "p3"]);
+  });
+
+  it("accepts bucketed _text_match", async () => {
+    const result = await client.search(products, {
+      q: "running",
+      query_by: "title",
+      exclude_fields: "embedding",
+      sort_by: [sortTextMatch({ buckets: 10 }, "desc"), "popularity:desc"],
+    });
+    expect(result.hits.map((h) => h.document.id)).toEqual(["p2", "p1"]);
+  });
+
+  // The limits compileSortBy enforces are Typesense's own. Sent raw, past the typed API,
+  // so a server that relaxes them shows up here rather than as a stale client-side check.
+  it("is the server that allows one _eval and three sort fields", async () => {
+    const search = (sort_by: string) =>
+      client.raw
+        .collections(products.name)
+        .documents()
+        .search({ q: "*", query_by: "title", sort_by } as never);
+
+    await expect(search("_eval(popularity:>1):desc,_eval(popularity:>2):desc")).rejects.toThrow(
+      /Only one sorting eval expression is allowed/,
+    );
+    await expect(
+      search("popularity:desc,minPriceMinor:asc,_text_match:desc,popularity:asc"),
+    ).rejects.toThrow(/Only upto 3 sort fields are allowed/);
   });
 });

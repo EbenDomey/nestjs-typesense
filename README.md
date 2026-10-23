@@ -123,6 +123,64 @@ schemas as plain data.
 The package ships both CommonJS and ESM, so `require('nestjs-typesense')` and
 `import ... from 'nestjs-typesense'` both work as-is, each with its own type declarations.
 
+## Auto-embedding fields
+
+Typesense can compute a vector for each document from its text fields
+([auto-embedding](https://typesense.org/docs/30.2/api/vector-search.html)). Declare one with
+`field.embedding`:
+
+```ts
+export const productCollection = defineCollection({
+  name: 'products',
+  fields: {
+    title: field.string(),
+    categoryNames: field.stringArray({ facet: true }),
+    tagNames: field.stringArray({ optional: true }),
+    optionValues: field.stringArray({ optional: true }),
+    categoryPathIds: field.stringArray({ facet: true }),
+    minPriceMinor: field.int64(),
+    popularity: field.int32(),
+    embedding: field.embedding({
+      from: ['title', 'categoryNames', 'tagNames', 'optionValues'],
+      model: 'ts/all-MiniLM-L12-v2',
+    }),
+  },
+})
+```
+
+That emits
+
+```json
+{ "name": "embedding", "type": "float[]", "index": true, "optional": false, "facet": false,
+  "embed": { "from": ["title", "categoryNames", "tagNames", "optionValues"],
+             "model_config": { "model_name": "ts/all-MiniLM-L12-v2" } } }
+```
+
+- **`from` is checked.** Each entry must be a `string` or `string[]` field of the same
+  collection, so a typo or a numeric field is a compile error on the `defineCollection` call:
+  `embedding "from" names "priceMinor", which is not a string or string[] field of this collection`.
+- **The embedding is read-only.** `InferDocument` types it as optional — a search hit may
+  carry it — but `client.upsert` and a collector's `transform` neither require nor accept it,
+  since Typesense computes it on every write.
+- **Remote models** take the rest of `model_config`: `apiKey`, `url`, `indexingPrefix`,
+  `queryPrefix`, plus `numDim`. None are needed for the built-in `ts/` models. `apiKey` is
+  sent to Typesense but left out of the schema hash, so rotating it is not schema drift.
+- Pass `optional: true` if a document can be missing *every* `from` field.
+
+With decorators, use `@TypesenseEmbedding` and type the property `TypesenseEmbeddingVector`.
+That brand is what lets the write path refuse it. The field and its hash are identical to
+`field.embedding`:
+
+```ts
+@TypesenseEmbedding({ from: ['title', 'categoryNames'], model: 'ts/all-MiniLM-L12-v2' })
+embedding?: TypesenseEmbeddingVector
+```
+
+The first collection created with a `ts/` model makes Typesense download it (about 130 MB).
+`collections().create()` blocks until that finishes, which took about 45 s here and can take
+minutes. Raise `connectionTimeoutSeconds` for that first create, or it times out client-side
+while the server keeps going.
+
 ## Register the module
 
 ```ts
@@ -170,6 +228,24 @@ collection that already holds documents, since the existing rows would have no v
 it. Rather than failing the bootstrap, the module logs a warning naming the field and
 leaves the collection alone. Declare the field `optional: true`, or use `recreate` and
 reindex.
+
+### Comparing with the live schema
+
+If you version collections yourself (create `products_v7`, reindex, swap an alias), use
+`diffSchema` to decide whether the live collection still matches the declaration:
+
+```ts
+const live = await typesense.raw.collections('products').retrieve()
+const diff = diffSchema(productCollection, live)
+// { added, removed, changed: [{ name, mismatches: [{ property, declared, live }] }], inSync }
+```
+
+It compares only what the declaration states. Typesense fills in the rest, and that is not
+drift. An embedding field comes back with the `num_dim` its model implies, plus
+`hnsw_params`, `vec_dist`, `store`, `stem` and more, so a deep-equal would report every
+embedding collection as drifted on every check. `num_dim` and `sort` are compared only when
+you declare them, and the embedding `api_key` is never compared. The bootstrap migrator
+uses the same diff, but acts only on added and removed fields.
 
 ## Sync from Postgres (or anything else)
 
@@ -319,6 +395,83 @@ results.hits[0].document.title // typed as string
 `results` is a plain `{ found, page, hits, facets }` — shape your own API response from it.
 For anything not covered, `typesense.raw` is the official client.
 
+### Similar items (vector queries)
+
+`vectorQuery` builds the `vector_query` string. The field must be a `float[]` or embedding
+field of the collection, or it does not compile:
+
+```ts
+const similar = await this.typesense.search(productCollection, {
+  q: '*',
+  query_by: 'title',
+  vector_query: vectorQuery('embedding', { id: product.id, k: 24, distanceThreshold: 0.6 }),
+  // => embedding:([], id: <id>, k: 24, distance_threshold: 0.6)
+  filter_by: { id: { ne: [product.id, ...alreadyShown] } },
+  sort_by: '_vector_distance:asc',
+  exclude_fields: 'embedding',
+})
+
+similar.hits[0].vector_distance // number
+```
+
+Pass `{ vector: [0.1, ...] }` instead of `id` to search with your own vector, or neither
+to tune a hybrid search (`q` plus the embedding in `query_by`). `alpha`, `ef` and
+`flatSearchCutoff` are also accepted. An `id` containing `,`, `(`, `)`, `[`, `]` or
+whitespace is refused: Typesense reads it unquoted, so there is no safe way to send it.
+
+### Advanced sorting
+
+`sort_by` takes up to three expressions. Besides `field:dir`, these build the rest without
+casts:
+
+| Builder | Emits |
+| ------- | ----- |
+| `sortEval(filter, 'desc')` | `_eval(<filter>):desc` |
+| `sortEvalWeighted([{ filter, score }, ...], 'desc')` | `_eval([ (<filter>):3, (<filter>):2 ]):desc` |
+| `sortTextMatch({ buckets: 10 }, 'desc')` | `_text_match(buckets: 10):desc` |
+| `'_vector_distance:asc'` (a literal) | itself |
+
+The filters are ordinary typed filters, compiled with `compileFilter`. Inside `sort_by`
+the collection is inferred from the search, so a misspelled field is a compile error with
+no type argument. Built anywhere else, name it: `sortEval<typeof productCollection>(...)`.
+A variable typed with `Omit<SearchParams<…>, …>` loses that context too, because the
+pass-through index signature swallows the named keys. Use `Pick` instead.
+
+A "For you" ranking, say: the shopper's preferred categories, with matches inside their
+usual price band ranked above matches outside it:
+
+```ts
+const tiers = preferredCategoryIds.flatMap((categoryId, rank) => {
+  const base = (preferredCategoryIds.length - rank) * 2
+  return [
+    {
+      filter: { categoryPathIds: { hasAny: [categoryId] }, minPriceMinor: { between: band } },
+      score: base + 1,
+    },
+    { filter: { categoryPathIds: { hasAny: [categoryId] } }, score: base },
+  ]
+})
+
+await this.typesense.search(productCollection, {
+  q: '*',
+  query_by: 'title',
+  sort_by: [sortEvalWeighted(tiers, 'desc'), 'popularity:desc', 'publishedAt:desc'],
+})
+// _eval([ (categoryPathIds:=[`c1`] && minPriceMinor:[1000..5000]):5, (categoryPathIds:=[`c1`]):4, ... ]):desc
+```
+
+Two Typesense rules, both measured against 30.2 and asserted in the integration suite:
+
+- **A document scores by the first clause it matches**, not the sum or the maximum. Put
+  the most specific clause first. Above, the price-banded clause must come before its
+  category-only one, or the category clause matches first and the band never counts.
+- **One `_eval` per `sort_by`.** Typesense rejects a second one ("Only one sorting eval
+  expression is allowed"), so fold every tier into one `sortEvalWeighted`.
+
+A literal `sort_by` that breaks either limit (a second `_eval`, or a fourth expression)
+fails to compile. A list assembled at runtime is checked again before sending, with an
+error that quotes Typesense's limit.
+
 ### Several queries in one round trip
 
 ```ts
@@ -419,6 +572,11 @@ docker compose up -d          # or: brew services start typesense-server
 npm run test:integration
 ```
 
+The embedding tests create a collection with the `ts/all-MiniLM-L12-v2` model. On a fresh
+server that first create downloads the model, so the block has a 10-minute timeout. Later
+runs reuse the cached model and take seconds. The suite targets Typesense 30.2
+(`docker-compose.yml` pins it).
+
 It refuses to run rather than skipping when no server answers, so a green run always
 means the server was hit. Point it elsewhere with `TYPESENSE_HOST`, `TYPESENSE_PORT`
 and `TYPESENSE_API_KEY`.
@@ -472,6 +630,16 @@ plain `Symbol()` the two copies would hold different tokens and `@Inject` would 
 resolve at bootstrap. The integration suite loads both builds together and asserts they
 agree.
 
+## Upgrading to 0.3.0
+
+`sort_by` is now typed as at most three expressions with at most one `_eval`, written as
+tuples. Literal arrays are unaffected, but a `sort_by` built up as a `SortExpression[]`
+variable no longer typechecks. Declare it as a tuple, or cast it as you would a dynamic
+field list. It is still validated at runtime either way.
+
+`client.upsert` and `TypesenseCollector.transform` now take `WritableDocumentOf<…>`. For a
+collection with no embedding field, that is exactly the old document type.
+
 ## Upgrading to 0.2.0
 
 `query_by`, `sort_by` and `facet_by` now take a field name or an **array** of them rather
@@ -488,9 +656,10 @@ field list dynamically, cast it: `fields as FieldSelection<typeof videoCollectio
 
 ## Status
 
-v0.2.0, CommonJS and ESM.
+v0.3.0, CommonJS and ESM.
 
-Verified against Typesense 29/30: collection creation, the `create`/`alter`/`recreate`
+Verified against Typesense 29/30 (auto-embedding, vector queries and `_eval` sorting
+against 30.2): collection creation, the `create`/`alter`/`recreate`
 migration strategies, typed search with filtering, faceting and pagination, multi-search,
 upsert and delete, full plus incremental indexing through collectors, geo filtering, and
 the health indicator through real `@nestjs/terminus`. Every filter shape the compiler can

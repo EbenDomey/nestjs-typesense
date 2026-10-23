@@ -6,9 +6,13 @@ import {
   isCollection,
   type TypesenseCollection,
   type TypesenseFieldRecord,
+  type WritableDocument,
 } from "./collection.js";
 import {
+  createEmbeddingField,
   createField,
+  type TypesenseEmbeddingOptions,
+  type TypesenseEmbeddingVector,
   type TypesenseField,
   type TypesenseFieldOptions,
   type TypesenseFieldType,
@@ -41,6 +45,11 @@ export type DocumentOf<TSource extends TypesenseCollectionSource> =
         ) => infer TInstance
       ? { id: string } & TInstance
       : never;
+
+/** The document shape written through the typed API — `DocumentOf` minus embedding fields. */
+export type WritableDocumentOf<TSource extends TypesenseCollectionSource> = WritableDocument<
+  DocumentOf<TSource>
+>;
 
 /**
  * The property shape a field decorator demands of the class it annotates.
@@ -214,6 +223,47 @@ export function TypesenseArray<
   ): void => {
     const type = `${options.type}[]` as ArrayOf<TElement>;
     recordField(target as object, key, createField(type, options));
+  };
+}
+
+/** Properties of a class whose type Typesense accepts as an embedding source. */
+type TextPropertyName<TTarget> = {
+  [K in keyof TTarget]-?: NonNullable<TTarget[K]> extends string | string[] ? K : never;
+}[keyof TTarget];
+
+/**
+ * Checks `from` against the class, through the `key` parameter.
+ *
+ * A constraint on the target cannot do it: a mapped `{ [S in From]: string }` rejects an
+ * optional source property, and `{ [S in From]?: string }` accepts a missing one. Testing
+ * the instance type directly gets both right, and intersecting a message onto the key turns
+ * a bad source into an error that names it.
+ */
+type EmbeddingKey<TKey extends string, TTarget, TFrom extends readonly string[]> = [
+  Exclude<TFrom[number], TextPropertyName<TTarget>>,
+] extends [never]
+  ? TKey
+  : TKey & {
+      readonly embeddingSourceError: `embedding "from" names "${Exclude<TFrom[number], TextPropertyName<TTarget>> & string}", which is not a string or string[] property of this class`;
+    };
+
+/**
+ * Declares an auto-embedding field. Typesense fills it in from `from` on every write.
+ *
+ * Annotate the property as `embedding?: TypesenseEmbeddingVector` — the brand is what lets
+ * `client.upsert` refuse a document that carries one.
+ */
+export function TypesenseEmbedding<const TFrom extends readonly string[]>(
+  options: TypesenseEmbeddingOptions<TFrom>,
+) {
+  return <
+    TKey extends string,
+    TTarget extends { [K in TKey]?: number[] | TypesenseEmbeddingVector },
+  >(
+    target: TTarget,
+    key: EmbeddingKey<TKey, TTarget, TFrom>,
+  ): void => {
+    recordField(target as object, key as string, createEmbeddingField(options));
   };
 }
 

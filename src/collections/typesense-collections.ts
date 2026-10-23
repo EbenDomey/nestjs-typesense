@@ -10,6 +10,7 @@ import {
   type TypesenseCollectionSource,
   type TypesenseDocumentClass,
 } from "../schema/decorators.js";
+import { diffSchema, type LiveFieldSchema } from "../schema/diff.js";
 import { TYPESENSE_MODULE_OPTIONS } from "../typesense.constants.js";
 import type { TypesenseModuleOptions } from "../typesense.module-options.js";
 
@@ -75,13 +76,12 @@ export class TypesenseCollections implements OnApplicationBootstrap {
       return;
     }
 
-    const liveNames = new Set((live.fields ?? []).map((f) => f.name));
-    const declaredNames = new Set(schema.fields.map((f) => f.name));
     // `id` is implicit in Typesense: `toSchema` emits it, but `retrieve()` never lists it
-    // and `update()` rejects it outright ("Field `id` cannot be altered"). Skip it on both
-    // sides of the diff or every alter of a drifted collection fails with a 400.
-    const added = schema.fields.filter((f) => f.name !== "id" && !liveNames.has(f.name));
-    const removed = [...liveNames].filter((n) => n !== "id" && !declaredNames.has(n));
+    // and `update()` rejects it outright ("Field `id` cannot be altered"). `diffSchema`
+    // skips it on both sides, or every alter of a drifted collection would fail with a 400.
+    // Only added and removed fields are acted on here; `changed` is left to callers who
+    // version collections themselves, since altering a field in place means drop + re-add.
+    const { added, removed } = diffSchema(collection, live as { fields?: LiveFieldSchema[] });
 
     if (added.length === 0 && removed.length === 0) return;
 

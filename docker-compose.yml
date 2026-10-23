@@ -2,7 +2,7 @@
 # Matches the defaults in src/typesense.integration.test.ts.
 services:
   typesense:
-    image: typesense/typesense:29.0
+    image: typesense/typesense:30.2
     ports:
       - "8108:8108"
     command: "--data-dir /data --api-key=xyz --enable-cors"

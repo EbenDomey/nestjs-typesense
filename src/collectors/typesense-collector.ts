@@ -1,5 +1,5 @@
 import type { TypesenseCollection } from "../schema/collection.js";
-import type { DocumentOf, TypesenseCollectionSource } from "../schema/decorators.js";
+import type { TypesenseCollectionSource, WritableDocumentOf } from "../schema/decorators.js";
 
 /**
  * Feeds documents into a collection.
@@ -14,8 +14,8 @@ import type { DocumentOf, TypesenseCollectionSource } from "../schema/decorators
 export interface TypesenseCollector<
   TSource extends TypesenseCollectionSource = TypesenseCollection,
 > {
-  /** Map a batch of source rows to Typesense documents. */
-  transform(entities: unknown[]): DocumentOf<TSource>[];
+  /** Map a batch of source rows to Typesense documents. Embedding fields are left to Typesense. */
+  transform(entities: unknown[]): WritableDocumentOf<TSource>[];
 
   /** Every row, for a full rebuild. Optionally narrowed to specific ids. */
   fetchAll(ids?: string[]): AsyncGenerator<unknown[], void, void>;

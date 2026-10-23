@@ -4,6 +4,7 @@ import {
   type DocumentOf,
   resolveCollection,
   type TypesenseCollectionSource,
+  type WritableDocumentOf,
 } from "../schema/decorators.js";
 import type { MultiSearchQueries, MultiSearchResults } from "../search/multi-search.js";
 import { compileSearchParams, type SearchParams } from "../search/params.js";
@@ -90,7 +91,7 @@ export class TypesenseClient {
 
   async upsert<TSource extends TypesenseCollectionSource>(
     collection: TSource,
-    documents: DocumentOf<TSource>[],
+    documents: WritableDocumentOf<TSource>[],
   ): Promise<void> {
     if (documents.length === 0) return;
 

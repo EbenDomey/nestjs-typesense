@@ -1,7 +1,12 @@
 export interface SearchResult<TDocument> {
   found: number;
   page: number;
-  hits: { document: TDocument; highlights?: unknown[] }[];
+  hits: {
+    document: TDocument;
+    highlights?: unknown[];
+    /** Distance from the `vector_query` — present on vector and hybrid searches only. */
+    vector_distance?: number;
+  }[];
   facets?: unknown[];
 }
 

@@ -46,6 +46,102 @@ export interface TypesenseField<
   readonly optional: TOptional;
   readonly facet: boolean;
   readonly sort?: boolean;
+  /** Present only on auto-embedding fields — see `field.embedding`. */
+  readonly embed?: TypesenseEmbedConfig;
+  /** Vector dimensions. Typesense infers it for its built-in `ts/` models. */
+  readonly numDim?: number;
+}
+
+/** The `model_config` block Typesense takes on an auto-embedding field. */
+export interface TypesenseEmbedModelConfig {
+  readonly model_name: string;
+  readonly api_key?: string;
+  readonly url?: string;
+  readonly indexing_prefix?: string;
+  readonly query_prefix?: string;
+}
+
+/**
+ * The `embed` block of an auto-embedding field.
+ *
+ * `TFrom` keeps the source field names as a literal tuple so `defineCollection` and the
+ * decorator can check them against the collection's own text fields.
+ */
+export interface TypesenseEmbedConfig<TFrom extends readonly string[] = readonly string[]> {
+  readonly from: TFrom;
+  readonly model_config: TypesenseEmbedModelConfig;
+}
+
+/** A `float[]` field Typesense fills in itself, by embedding the `from` fields. */
+export interface TypesenseEmbeddingField<TFrom extends readonly string[] = readonly string[]>
+  extends TypesenseField<"float[]", boolean> {
+  readonly embed: TypesenseEmbedConfig<TFrom>;
+}
+
+declare const embeddingBrand: unique symbol;
+
+/**
+ * The value of an auto-embedding field: a `number[]` Typesense computed.
+ *
+ * Branded so the typed write path can tell it apart from an ordinary `float[]` field and
+ * refuse it. Annotate a decorated class's embedding property with this type for the same
+ * protection; a plain `number[]` annotation still works but stays writable.
+ */
+export type TypesenseEmbeddingVector = number[] & { readonly [embeddingBrand]: true };
+
+export interface TypesenseEmbeddingOptions<TFrom extends readonly string[]> {
+  /** The fields to embed. Must be `string` or `string[]` fields of the same collection. */
+  from: TFrom;
+  /** Model name, e.g. `ts/all-MiniLM-L12-v2` (built in) or `openai/text-embedding-3-small`. */
+  model: string;
+  /** For remote models (OpenAI, PaLM, ...). Not needed for `ts/` models. */
+  apiKey?: string;
+  /** A custom OpenAI-compatible endpoint. */
+  url?: string;
+  /** Prepended to each document's text before embedding (e.g. `passage:` for E5 models). */
+  indexingPrefix?: string;
+  /** Prepended to the query text before embedding (e.g. `query:` for E5 models). */
+  queryPrefix?: string;
+  /** Vector dimensions. Typesense infers it for its own models; leave unset unless required. */
+  numDim?: number;
+  /** Allow the field to be absent — needed when every `from` field can be absent. Default false. */
+  optional?: boolean;
+}
+
+/**
+ * Builds an auto-embedding field. Shared by `field.embedding` and `@TypesenseEmbedding`, for
+ * the same byte-identical-hash reason as `createField`.
+ *
+ * Keys are only emitted when given, so a field without `apiKey` serialises — and hashes —
+ * exactly as if the option did not exist.
+ */
+export function createEmbeddingField<const TFrom extends readonly string[]>(
+  options: TypesenseEmbeddingOptions<TFrom>,
+): TypesenseEmbeddingField<TFrom> {
+  if (options.from.length === 0) {
+    throw new Error("An embedding field needs at least one `from` field to embed");
+  }
+  if (options.numDim !== undefined && !(Number.isInteger(options.numDim) && options.numDim > 0)) {
+    throw new TypeError(`numDim must be a positive integer, received ${options.numDim}`);
+  }
+
+  const model_config: TypesenseEmbedModelConfig = {
+    model_name: options.model,
+    ...(options.apiKey === undefined ? {} : { api_key: options.apiKey }),
+    ...(options.url === undefined ? {} : { url: options.url }),
+    ...(options.indexingPrefix === undefined ? {} : { indexing_prefix: options.indexingPrefix }),
+    ...(options.queryPrefix === undefined ? {} : { query_prefix: options.queryPrefix }),
+  };
+
+  return {
+    type: "float[]",
+    index: true,
+    optional: options.optional ?? false,
+    facet: false,
+    // Copied so a caller mutating its own array cannot change a declared schema.
+    embed: { from: [...options.from] as unknown as TFrom, model_config },
+    ...(options.numDim === undefined ? {} : { numDim: options.numDim }),
+  };
 }
 
 /**
@@ -101,4 +197,12 @@ export const field = {
     createField("object[]", o),
   auto: <TOptional extends boolean = false>(o?: TypesenseFieldOptions<TOptional>) =>
     createField("auto", o),
+  /**
+   * An auto-embedding `float[]` field. Typesense computes it from `from` on every write, so
+   * the typed write path neither requires nor accepts it.
+   *
+   *   embedding: field.embedding({ from: ["title", "tags"], model: "ts/all-MiniLM-L12-v2" })
+   */
+  embedding: <const TFrom extends readonly string[]>(o: TypesenseEmbeddingOptions<TFrom>) =>
+    createEmbeddingField(o),
 } as const;
