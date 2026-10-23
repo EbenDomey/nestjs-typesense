@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-10-23 22:30'
-updated_date: '2026-10-23 22:41'
+updated_date: '2026-10-23 22:49'
 labels: []
 dependencies: []
 ordinal: 14000
@@ -47,6 +47,8 @@ Measured on Typesense 30.2 (brew, localhost:8108) before designing: live embed f
 Decisions: from-check is an intersection on the defineCollection parameter (EmbedSourceCheck), not a TFields constraint — optional-literal guards still pass. Embedding api_key excluded from the hash (rotation is not drift) and from diffSchema. WritableDocument returns the document type unchanged when there are no embedding fields, so existing upsert types are identical. sortEval infers its collection from the sort_by contextual return type via a covariant brand. Omit<SearchParams> loses that context (index signature) — documented; use Pick.
 Verification: bun run typecheck clean; bun run lint clean; vitest 112 passed; npm run test:integration 56 passed on live 30.2; design:paramtypes present in 8 dist files (cjs+esm). Every new type guard was mutation-tested (bug reintroduced -> typecheck failed). 0.2.0 hash pinned (e12074aa0bdb62eb) and unchanged.
 Release: version bumped to 0.3.0; merge/tag/npm publish pending owner action.
+
+Released: nestjs-typesense@0.3.0 published to npm 2026-10-23 (dist-tag latest), tag v0.3.0 on main, CI green. Smoke-tested the published tarball: CJS require and ESM import both expose vectorQuery, sortEvalWeighted, diffSchema, TypesenseEmbedding.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
